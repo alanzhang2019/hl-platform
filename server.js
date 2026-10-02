@@ -187,10 +187,27 @@ async function streamReply(req, res, ctx, sid, opt) {
   });
 
   // 联网搜索：开了才搜；搜不到/没配通道都如实回传，由前端告诉学生"本条未联网"
+  // ★ 2026-10-02 改：以前把整条消息直接当搜索词（webSearch(opt.text)）——
+  //   学生说「格子只能从上边和左边来，那到达的数怎么算」，整句就被丢进搜索引擎，
+  //   搜回一排字面沾边的垃圾页，前端渲染成「新词搜索」列表，纯属干扰。
+  //   现在先让模型判断"这条要不要联网 + 提炼检索词"（chat.planWebSearch），
+  //   不需要联网就一条请求都不发；需要联网也只拿提炼后的短关键词去搜。
+  //   前端只在真搜过时显示「联网搜索：<检索词>」，没搜就完全不出现联网字样。
   let searchRes = null;
   if (opt.webSearch && opt.text) {
-    try { searchRes = await chat.webSearch(opt.text, { limit: 5 }); }
-    catch (e) { searchRes = { ok: false, reason: 'ERROR', results: [], message: '联网搜索暂时不可用，本条回答未联网' }; }
+    let plan = null;
+    try {
+      // 最近几轮（不含刚落库的这条用户消息）给调度器做上下文，追问"那第二点呢"才有判断依据
+      const planHist = core.buildContext(sid, conv.id, 8).messages
+        .filter(m => m.content).slice(0, -1)
+        .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content).slice(0, 500) }));
+      plan = await chat.planWebSearch(opt.text, { history: planHist, model: model });
+    } catch (e) { plan = { need: true, query: opt.text }; }
+    if (plan.need) {
+      try { searchRes = await chat.webSearch(plan.query || opt.text, { limit: 5 }); }
+      catch (e) { searchRes = { ok: false, reason: 'ERROR', results: [], message: '联网搜索暂时不可用，本条回答未联网' }; }
+      if (searchRes) searchRes.query = plan.query || '';
+    }
   }
 
   // 读链接：学生直接把 URL 发过来时，**真的去打开那个页面**。
@@ -306,7 +323,7 @@ async function streamReply(req, res, ctx, sid, opt) {
       sources: docCtx.hits.map(h => ({ docId: h.docId, filename: h.filename, chunk: h.chunkIndex, score: h.score })),
       agentId: conv.agentId || '',
       skills: skills.enabledIds(sid),
-      webSearch: opt.webSearch ? (searchRes ? { ok: searchRes.ok, results: (searchRes.results || []).slice(0, 5), message: searchRes.message || '' } : null) : null,
+      webSearch: opt.webSearch ? (searchRes ? { ok: searchRes.ok, query: searchRes.query || '', results: (searchRes.results || []).slice(0, 5), message: searchRes.message || '' } : null) : null,
       links: linkMeta,
     },
   });
@@ -328,7 +345,7 @@ async function streamReply(req, res, ctx, sid, opt) {
     model: model,
     agentId: conv.agentId || '',
     skills: skills.enabledIds(sid),
-    webSearch: searchRes ? { ok: searchRes.ok, message: searchRes.message || '', results: (searchRes.results || []).slice(0, 5) } : null,
+    webSearch: searchRes ? { ok: searchRes.ok, query: searchRes.query || '', message: searchRes.message || '', results: (searchRes.results || []).slice(0, 5) } : null,
     links: linkMeta,
     sources: docCtx.hits.map(h => ({ docId: h.docId, filename: h.filename, chunk: h.chunkIndex, score: h.score })),
   });

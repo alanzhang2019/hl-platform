@@ -1113,7 +1113,7 @@
     const meta = m.meta || {};
     if (meta.webSearch) {
       out += meta.webSearch.ok && (meta.webSearch.results || []).length
-        ? '<div class="msg-net on">联网搜索：找到 ' + meta.webSearch.results.length + ' 条网页' +
+        ? '<div class="msg-net on">联网搜索' + (meta.webSearch.query ? '「' + esc(meta.webSearch.query) + '」' : '') + '：找到 ' + meta.webSearch.results.length + ' 条网页' +
           '<div class="net-list">' + meta.webSearch.results.map((r, i) =>
             '<a href="' + esc(r.url) + '" target="_blank" rel="noopener">' + (i + 1) + '. ' + esc(r.title || r.url) + '</a>').join('') + '</div></div>'
         : '<div class="msg-net off">' + esc(meta.webSearch.message || '联网搜索暂时不可用，本条回答未联网') + '</div>';
@@ -1470,7 +1470,7 @@
             a.data.id = replyId;
             if (j.webSearch) {
               const tag = (j.webSearch.ok && (j.webSearch.results || []).length)
-                ? '联网搜索：找到 ' + j.webSearch.results.length + ' 条网页'
+                ? '联网搜索' + (j.webSearch.query ? '「' + j.webSearch.query + '」' : '') + '：找到 ' + j.webSearch.results.length + ' 条网页'
                 : (j.webSearch.message || '联网搜索暂时不可用，本条回答未联网');
               a.el.querySelector('.acts').insertAdjacentHTML('beforebegin',
                 '<div class="msg-net ' + (j.webSearch.ok && (j.webSearch.results || []).length ? 'on' : 'off') + '">' + esc(tag) + '</div>');
