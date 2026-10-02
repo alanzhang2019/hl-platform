@@ -204,13 +204,34 @@ async function waitFinal(token, id, ms) {
     ok('收到多条 delta（真的是流式）', deltas.length > 5, deltas.length);
     ok('收到 done 事件且状态 done', !!done1 && done1.data.status === 'done', JSON.stringify(done1 && done1.data));
     ok('done 带 length 与 replyId', done1.data.length > 0 && done1.data.replyId === meta1.data.replyId);
-    // meta 回传联网状态。以前"没配通道"必然 OK:false；现在内置通道默认开着，
-    // 所以这一条只守住"失败时必须带着'未联网'字样"，成功时要求真的有结果。
-    ok('meta 回传联网状态', !!meta1.data.webSearch, JSON.stringify(meta1.data.webSearch));
-    const ws = meta1.data.webSearch || {};
-    ok('   └ 成功就要带结果，没成功就要说"未联网"（不许静默降级）',
-      (ws.ok === true && Array.isArray(ws.results)) || (ws.ok === false && /未联网/.test(ws.message || '')),
+    // meta 回传联网状态。★ 2026-10-02 口径变更（上游提交 7404842「先由模型规划是否需要联网」）：
+    //   联网现在是**三步**而不是两步 —— ①判断要不要搜 ②要搜才提炼词去搜 ③不需要就一条请求都不发。
+    //   于是 webSearch 有**三种**合法取值：
+    //     · 对象 + ok:true  → 真搜了，必须有 results，且带检索词 query
+    //     · 对象 + ok:false → 搜了但失败，必须带"未联网"字样（不许静默降级成空列表）
+    //     · null            → **这条不需要联网**（含 mock 模式判断器直接返回 need:false）
+    //   ⚠️ 旧断言 `!!webSearch` 要求它恒为真 —— 在"不需要联网"成为合法态之后那是过时的，
+    //      把"不搜"误判成"静默降级"。测试发的「三角形面积怎么算？」正是**不需要联网**那类。
+    const wsRaw = meta1.data.webSearch;
+    const wsIsNull = wsRaw === null || wsRaw === undefined;
+    ok('meta 回传联网状态（对象或 null 都合法，但不许是别的类型）',
+      wsIsNull || (typeof wsRaw === 'object' && !Array.isArray(wsRaw)),
+      JSON.stringify(wsRaw));
+    const ws = wsRaw || {};
+    ok('   └ 真搜了就要带结果与检索词 / 失败就要说"未联网" / 不需要联网才是 null（三者不许混）',
+      wsIsNull
+        || (ws.ok === true && Array.isArray(ws.results) && typeof ws.query === 'string')
+        || (ws.ok === false && /未联网/.test(ws.message || '')),
       JSON.stringify(ws).slice(0, 160));
+    // ★ 反证：把"不联网"和"联网失败"混为一谈会骗人 —— ok:false 却给空 results 且无 message 的形态必须被抓
+    ok('   └ 反证：ok:false 但既无 message 又无 results 的"静默降级"形态不被接受',
+      !(wsRaw && wsRaw.ok === false && !/未联网/.test(wsRaw.message || '')),
+      JSON.stringify(wsRaw).slice(0, 160));
+    // ★ 本条钉住"不需要联网时不发请求"这个新契约：mock 模式下判断器直接 need:false，
+    //   所以 webSearch 必须是 null；一旦哪天又退回"每条都去搜整句"，这条会红。
+    ok('   └ ★ 不需要联网时确实是 null（判断器在 mock 下直接 need:false，一条请求都不发）',
+      wsIsNull,
+      JSON.stringify(wsRaw).slice(0, 160));
 
     const rid1 = meta1.data.replyId;
     const rm1 = await GET('/api/messages/' + rid1, T);
