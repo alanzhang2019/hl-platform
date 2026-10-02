@@ -151,6 +151,13 @@ function resolveSession(token) {
   const s = D.get('SELECT * FROM sessions WHERE token = ?', token);
   if (!s || s.ended_at) return null;
   if (D.now() - s.last_seen_at > SESSION_TTL_MS) return null;
+  // ★ 被禁用的用户就算手里还攥着旧令牌也不能进来。
+  //   禁用时已经把所有会话置为结束，这里是第二道闸：防止"结束会话"那步漏了
+  //   （比如并发期间刚发的令牌），否则"禁用"在管理员眼里就是点了没反应。
+  if (s.user_id) {
+    const u = D.get('SELECT disabled FROM users WHERE id = ?', s.user_id);
+    if (u && u.disabled) return null;
+  }
   if (D.now() - s.last_seen_at > SEEN_THROTTLE_MS) {
     D.run('UPDATE sessions SET last_seen_at = ? WHERE token = ?', D.now(), token);
   }
@@ -207,6 +214,97 @@ function register({ username, phone, email, password, name, stage, grade, spaceI
 }
 
 // 已登录改密码：必须验原密码，防止令牌被盗后直接改密码锁死账号
+/**
+ * 管理员视角的用户列表。
+ *
+ * ★ 为什么"能操作"必须包含这些字段：管理员只会在这个界面上做决定，
+ *   **看不出谁是谁就无从下手**。以前只有空间列表，本质上是"看得见、管不着"。
+ *
+ * ★ 隐私口径：这里给的是**联系方式与状态**，不给学习内容。
+ *   管理员不该看到学生答了什么题 —— 那是只对本人和其家长可见的东西。
+ *   password_hash 也一样：SELECT 把它查出来只为折算成一个布尔
+ *   `hasPassword`（有没有密码 = 能不能重置），**后面的对象是逐字段手写的，
+ *   哈希本身不会出现在返回结构里** —— 别改成 `Object.assign`/展开整个行对象。
+ */
+const USER_QUERY_COLS = 'id, username, phone, email, name, stage, grade, role, created_at, last_login_at, '
+  + 'disabled, disabled_reason, space_id, password_hash';
+
+function listUsers() {
+  const rows = D.all('SELECT ' + USER_QUERY_COLS + ' FROM users ORDER BY created_at DESC, id ASC');
+  const spaceName = {};
+  D.all('SELECT id, name FROM spaces').forEach(r => { spaceName[r.id] = r.name; });
+  const convs = {};
+  D.all('SELECT space_id, COUNT(*) c FROM conversations GROUP BY space_id').forEach(r => { convs[r.space_id] = r.c; });
+  // ★ messages 是按 conversation_id 归的，**没有 space_id 列**（按空间分组必须 JOIN）。
+  //   这一句踩过一次：NO such column → 管理员打开用户页直接 500。
+  const msgs = {};
+  D.all('SELECT c.space_id sid, COUNT(*) c FROM messages m JOIN conversations c ON c.id = m.conversation_id ' +
+    'WHERE m.deleted = 0 GROUP BY c.space_id').forEach(r => { msgs[r.sid] = r.c; });
+  return rows.map(u => ({
+    id: u.id,
+    name: u.name || '',
+    username: u.username || '',
+    phone: u.phone || '',
+    email: u.email || '',
+    stage: u.stage || '',
+    grade: u.grade || '',
+    role: u.role || 'student',
+    disabled: !!u.disabled,
+    disabledReason: u.disabled_reason || '',
+    spaceId: u.space_id,
+    spaceName: spaceName[u.space_id] || u.space_id,
+    conversations: convs[u.space_id] || 0,
+    messages: msgs[u.space_id] || 0,
+    // 有密码才能被"重置密码"影响 —— 纯空间口令登录的账号这里要给个明示
+    hasPassword: !!u.password_hash,
+    createdAt: u.created_at,
+    lastLoginAt: u.last_login_at || 0,
+  }));
+}
+
+function findUserAny(idOrAccount) {
+  const k = String(idOrAccount || '').trim();
+  if (!k) return null;
+  return D.get('SELECT * FROM users WHERE id = ? OR username = ? OR phone = ? OR email = ?', k, k, k, k) || null;
+}
+
+/**
+ * 禁用 / 启用。
+ *
+ * ★ 禁用必须**立刻生效**：只改一个字段的话，他手上那个会话令牌还能用到过期。
+ *   本在校的学生被点"禁用"后还能继续聊管理员会以为自己操作失败了。
+ */
+function setUserDisabled(idOrAccount, disabled, reason) {
+  const u = findUserAny(idOrAccount);
+  if (!u) { const e = new Error('用户不存在'); e.code = 'NOT_FOUND'; throw e; }
+  const want = !!disabled;
+  D.run('UPDATE users SET disabled = ?, disabled_reason = ? WHERE id = ?',
+    want ? 1 : 0, want ? String(reason || '').slice(0, 200) : '', u.id);
+  if (want) {
+    // 踢下线：把还没结束的会话全部结束掉。
+    D.run("UPDATE sessions SET ended_at = ? WHERE user_id = ? AND ended_at = 0", D.now(), u.id);
+  }
+  return { ok: true, id: u.id, disabled: want };
+}
+
+/**
+ * 管理员重置密码。
+ *
+ * ★ 不需要原密码 —— 他自己忘记了才来找管理员。
+ *   但必须**生成新密码而不是沿用旧的**：原哈希拿不出来，验证不了。
+ *   返回明文是为了让管理员能 Copy 出去告诉对方；调用它的 HTTP 层有管理令牌守着。
+ */
+function adminResetPassword(idOrAccount, newPassword) {
+  const u = findUserAny(idOrAccount);
+  if (!u) { const e = new Error('用户不存在'); e.code = 'NOT_FOUND'; throw e; }
+  const pw = String(newPassword || '');
+  if (pw.length < 6) { const e = new Error('新密码至少 6 位'); e.code = 'BAD_PASSWORD'; throw e; }
+  D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPw(pw), u.id);
+  // 换密码就必须重登：不然旧设备照旧能用这个账号
+  D.run("UPDATE sessions SET ended_at = ? WHERE user_id = ? AND ended_at = 0", D.now(), u.id);
+  return { ok: true, id: u.id };
+}
+
 function changePassword(userId, { oldPassword, newPassword }) {
   const u = D.get('SELECT * FROM users WHERE id = ?', userId);
   if (!u) { const e = new Error('用户不存在'); e.code = 'NOT_FOUND'; throw e; }
@@ -223,7 +321,15 @@ function login({ account, password }) {
   if (!a) { const e = new Error('请输入账号'); e.code = 'BAD_INPUT'; throw e; }
   // 用户名 / 手机号 / 邮箱 三选一 —— 对标站也是同一个输入框
   const u = D.get('SELECT * FROM users WHERE username = ? OR phone = ? OR email = ?', a, a, a);
+  // ★ 不知道密码也不要让他知道"这个账号存在但密码错了" —— 两拒都一样的话术。
+  //   校验顺序上前先查密码，避免用"能否登录"来枚举账号是否存在。
   if (!u || !D.checkPw(password, u.password_hash)) { const e = new Error('账号或密码不正确'); e.code = 'BAD_CRED'; throw e; }
+  // ★ 禁用必须真的拦得住：只写字段不拦登录，"禁用"就只是个摆设。
+  if (u.disabled) {
+    const e = new Error(u.disabled_reason ? ('这个账号已被停用：' + u.disabled_reason) : '这个账号已被停用');
+    e.code = 'USER_DISABLED';
+    throw e;
+  }
   touchSpace(u.space_id);
   D.run('UPDATE users SET last_login_at = ? WHERE id = ?', D.now(), u.id);
   return { userId: u.id, spaceId: u.space_id, name: u.name };
@@ -280,4 +386,6 @@ module.exports = {
   ensureDefaultSpace, nextSpaceId,
   issueSession, resolveSession, endSession,
   register, login, profile, updateProfile, changePassword,
+  // 管理员用户管理（不只是能看，还得能操作）
+  listUsers, setUserDisabled, adminResetPassword, findUserAny,
 };

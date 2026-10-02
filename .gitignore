@@ -23,3 +23,8 @@ _shots*/
 _probe-out/
 *-shots/
 *.log
+
+# ---- 编辑残留：改动前随手 cp 的备份，入库只会干扰 diff ----
+*.bak
+*.orig
+*~

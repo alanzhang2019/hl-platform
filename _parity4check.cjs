@@ -70,9 +70,12 @@ llm.completeJSON = async () => null;
     ok(d.type === type, 'preset 命中「' + kw + '」→ ' + type, d.type);
     ok(interactive.validateDSL(d).ok === true, 'preset「' + kw + '」自合法（闸门能过）', d);
   }
+  // ★ 2026-10-02 改口径：关键词没命中时**必须返回 null**，不许再给一个写死的示例模型。
+  //   旧行为会把"方格取数"这种题挂上"一次函数与直线斜率"，学生看到的东西和题目无关。
   const def = interactive.presetFromText('完全无关的一段话');
-  ok(def.type === 'function-plot' && def.title.indexOf('动手') >= 0, '默认兜底给一个可玩的函数图', def.title);
-  ok(interactive.validateDSL(def).ok === true, '默认兜底也自合法');
+  ok(def === null, '★ 关键词不命中 → 不给兜底模型（宁可没有，也不给一个错的）', def);
+  ok(interactive.presetFromText('方格取数：从左上角走到右下角，只能向右或向下') === null,
+    '★ 反证：一道方格取数题不许再匹配到「一次函数」预设');
 
   // ---------- 3. generate（mock：completeJSON=null → preset 兜底 + 落库 + 附件回带 jobId）----------
   const conv = core.createConversation(sid, null, { title: '批次4 模块测试' });
@@ -114,14 +117,21 @@ llm.completeJSON = async () => null;
   ok(interactive.validateDSL(r2.dsl).ok === true, '自愈产出的 DSL 合法', r2.dsl);
   ok(r2.dsl.title === '修复后的图', '自愈拿到的是第二次的合法结果', r2.dsl.title);
 
-  // ---------- 5. 自愈失败：两次都非法 → preset 兜底 ----------
+  // ---------- 5. 自愈失败 + 主题对不上 → 如实失败，**绝不挂一个示例模型** ----------
   llm.completeJSON = async () => ({ type: 'function-plot', title: '', f: 'x', domain: [-5, 5] });
   const um3 = core.addMessage(sid, conv.id, { role: 'user', content: '坏模型' });
   const r3 = await interactive.generate(sid, null, { text: '模型一直抽风', messageId: um3.id, conversationId: conv.id });
   ok(r3.usedHeal === true, '两次都非法也走了自愈分支', r3.usedHeal);
-  ok(r3.source === 'preset', '自愈失败后回 preset 兜底', r3.source);
-  ok(interactive.validateDSL(r3.dsl).ok === true, 'preset 兜底一定自合法', r3.dsl);
+  ok(r3.source === 'none' && r3.dsl === null && r3.id === null, '★ 生成不出来、主题也对不上 → 什么都不挂（source=none）', r3.source);
+  ok(interactive.getByMessage(sid, um3.id).length === 0, '★ 失败时消息上不许留下任何互动附件');
   ok(!!r3.error, '两次非法记录了错误原因', r3.error);
+  const job3 = interactive.getJob(sid, r3.jobId);
+  ok(job3 && job3.status === 'failed', '★ 任务如实标 failed（不假装 done）', job3 && job3.status);
+
+  // 反证：主题**对得上**时兜底仍然生效（没模型也能演示，且不会跑题）
+  const r4 = await interactive.generate(sid, null, { text: '这道一次函数的斜率怎么求' });
+  ok(r4.source === 'preset' && !!r4.dsl && r4.dsl.type === 'function-plot', '主题命中时兜底仍然给模型', r4.source + ' / ' + (r4.dsl && r4.dsl.title));
+  ok(r4.id === r4.jobId, '无 messageId 时不挂附件（老约定不变）', r4.id);
 
   // ---------- 6. 跨空间读不到别人的任务（SQL 按 space_id 隔离）----------
   ok(interactive.getJob('0002', r1.jobId) === null, '跨空间读不到别人的互动任务');

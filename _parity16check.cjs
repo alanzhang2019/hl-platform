@@ -45,11 +45,9 @@ function mkReview(cardId, result, dayOffset) {
   return id;
 }
 function mkActivity(kind, dayOffset) {
-  const id = D.uid('a_');
   const at = DAY_ANCHOR + dayOffset * DAY - 60 * 60000; // 当天 11:00
-  D.run('INSERT INTO activity(id,space_id,kind,ref_id,meta_json,at) VALUES(?,?,?,?,?,?)',
-    id, SP, kind, '', '{}', at);
-  return id;
+  D.run('INSERT INTO activity(space_id,user_id,kind,ref_id,meta_json,at) VALUES(?,?,?,?,?,?)',
+    SP, null, kind, null, null, at);
 }
 
 const D0 = daily.dayKey(DAY_ANCHOR);
@@ -154,6 +152,7 @@ const pastWeek = weekly.build(SP, DM2, DM1);
 ok('isCurrentWeek = false（过去周）', pastWeek.isCurrentWeek === false);
 
 // ---------- 清理 ----------
+try { D.db.close(); } catch (e) {}
 fs.rmSync(TMP, { recursive: true, force: true });
 
 // ---------- 汇总 ----------

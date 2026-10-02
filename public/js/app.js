@@ -495,21 +495,142 @@
     try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch (e) {}
   }
 
-  // 管理员：空间列表
+  // 管理员：空间列表 + **用户管理**
+  //
+  // 以前这个面板只有一列空间，看得到用户却管不着 —— 家长打电话来说"帮我停掉那个账号"，
+  // 管理员只能在数据库里手改。现在把三件事做进界面：看清楚是谁、停用/恢复、重置密码。
+  // ★ 删号不做：学生攒的对话和错题是家长的资产，删掉不可逆；停用 + 可恢复才对。
+  let adminToken = '';
+  function adminApi(path, opt) {
+    const o = Object.assign({ headers: { 'Content-Type': 'application/json' } }, opt || {});
+    const sep = path.indexOf('?') >= 0 ? '&' : '?';
+    return fetch(path + sep + '_t=' + encodeURIComponent(adminToken), o);
+  }
+
+  function agoStr(ts) {
+    if (!ts) return '从未';
+    const d = Date.now() - Number(ts);
+    if (d < 60000) return '刚刚';
+    if (d < 3600000) return Math.floor(d / 60000) + ' 分钟前';
+    if (d < 86400000) return Math.floor(d / 3600000) + ' 小时前';
+    if (d < 2592000000) return Math.floor(d / 86400000) + ' 天前';
+    try { return new Date(Number(ts)).toLocaleDateString(); } catch (e) { return '—'; }
+  }
+
+  function adminUsersHTML(users) {
+    if (!users.length) return '<p class="dim">还没有注册用户</p>';
+    return users.map(u => {
+      const who = HL.esc(u.name || u.username || u.phone || u.email || u.id);
+      // 联系方式要能"看得到也能复制走" —— 管理员常常要去另一个系统里查这个人
+      const contacts = [u.phone ? ('手机 ' + HL.esc(u.phone)) : '', u.email ? HL.esc(u.email) : '']
+        .filter(Boolean).join(' · ') || '未绑定联系方式';
+      return '<div class="row-card adm-user" data-uid="' + HL.esc(u.id) + '">' +
+        '<div class="adm-u-h"><b>' + who + '</b>' +
+        (u.disabled ? '<span class="chip almost">已停用</span>' : '<span class="chip mastered">正常</span>') +
+        '<span class="chip">' + HL.esc(u.role === 'admin' ? '管理员' : (u.role === 'parent' ? '家长' : '学生')) + '</span>' +
+        '</div>' +
+        '<div class="dim adm-u-m">' + contacts + '</div>' +
+        '<div class="dim adm-u-m">空间 ' + HL.esc(u.spaceName || u.spaceId) + '（' + u.spaceId + '）' +
+        ' · 对话 ' + u.conversations + ' · 消息 ' + u.messages + '</div>' +
+        '<div class="dim adm-u-m">注册 ' + agoStr(u.createdAt) + ' · 最近登录 ' + agoStr(u.lastLoginAt) + '</div>' +
+        (u.disabled && u.disabledReason ? '<div class="dim adm-u-m">停用原因：' + HL.esc(u.disabledReason) + '</div>' : '') +
+        '<div class="adm-u-act">' +
+        '<button class="btn sm" data-adm="' + (u.disabled ? 'enable' : 'disable') + '" data-uid="' + HL.esc(u.id) + '">' +
+        (u.disabled ? '恢复使用' : '停用') + '</button>' +
+        '<button class="btn sm" data-adm="reset" data-uid="' + HL.esc(u.id) + '">重置密码</button>' +
+        '</div></div>';
+    }).join('');
+  }
+
+  async function reloadAdminUsers() {
+    const r = await adminApi('/api/admin/users').then(x => x.json()).catch(() => ({ users: [] }));
+    const box = $('#admUsers');
+    if (box) box.innerHTML = adminUsersHTML(r.users || []);
+  }
+
   async function openAdmin() {
     const pw = prompt('请输入管理密码');
     if (pw == null) return;
+    let r;
     try {
-      const r = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) }).then(x => x.json());
-      if (!r.ok) { toast(r.message || '管理密码不正确'); return; }
-      const list = await fetch('/api/admin/spaces?_t=' + encodeURIComponent(r.token)).then(x => x.json());
-      const rows = (list.spaces || []).map(s =>
-        '<div class="row-card" style="margin-bottom:8px"><div><b>' + HL.esc(s.name) + '</b>' +
-        (s.dupName ? ' <span class="chip almost">重名</span>' : '') +
-        '<div class="dim">ID：' + HL.esc(s.spaceId) + ' · 对话 ' + s.conversations + ' · 知识卡 ' + s.cards +
-        ' · ' + (s.hasPasscode ? '有口令' : '无口令') + '</div></div></div>').join('');
-      openModal('空间管理（' + (list.spaces || []).length + ' 个）', rows || '<p class="dim">还没有空间</p>');
-    } catch (e) { toast(e.message); }
+      r = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) }).then(x => x.json());
+    } catch (e) { toast('连不上服务器'); return; }
+    if (!r.ok) { toast(r.message || '管理密码不正确'); return; }
+    adminToken = r.token;
+
+    let list = { spaces: [] }, users = { users: [] };
+    try {
+      [list, users] = await Promise.all([
+        adminApi('/api/admin/spaces').then(x => x.json()),
+        adminApi('/api/admin/users').then(x => x.json()),
+      ]);
+    } catch (e) { toast('读取管理数据失败'); return; }
+
+    const spRows = (list.spaces || []).map(s =>
+      '<div class="row-card" style="margin-bottom:8px"><div><b>' + HL.esc(s.name) + '</b>' +
+      (s.dupName ? ' <span class="chip almost">重名</span>' : '') +
+      '<div class="dim">ID：' + HL.esc(s.spaceId) + ' · 对话 ' + s.conversations + ' · 知识卡 ' + s.cards +
+      ' · ' + (s.hasPasscode ? '有口令' : '无口令') + '</div></div></div>').join('');
+
+    openModal('管理后台', [
+      '<div class="adm-tabs">' +
+      '<button class="adm-tab on" data-admtab="users">用户管理（' + (users.users || []).length + '）</button>' +
+      '<button class="adm-tab" data-admtab="spaces">空间（' + (list.spaces || []).length + '）</button>' +
+      '</div>',
+      '<div id="admUsers">' + adminUsersHTML(users.users || []) + '</div>',
+      '<div id="admSpaces" hidden>' + (spRows || '<p class="dim">还没有空间</p>') + '</div>',
+      '<p class="dim" style="margin-top:10px">停用会立刻让他下线并无法登录；这里不提供删号 —— ' +
+      '学生的对话与错题是家长的资产，删掉不可逆。</p>',
+    ].join(''));
+  }
+
+  // 管理后台的事件委托：面板内容是动态重排的，逐个绑会在重绘后失效
+  function initAdminPanel() {
+    document.addEventListener('click', async (e) => {
+      const tab = e.target && e.target.closest ? e.target.closest('.adm-tab') : null;
+      if (tab) {
+        const want = tab.dataset.admtab;
+        const uBox = $('#admUsers'), sBox = $('#admSpaces');
+        if (uBox && sBox) {
+          const isUsers = want === 'users';
+          uBox.hidden = !isUsers; sBox.hidden = isUsers;
+        }
+        const wrap = tab.parentElement;
+        if (wrap) Array.prototype.forEach.call(wrap.querySelectorAll('.adm-tab'), b => b.classList.toggle('on', b === tab));
+        return;
+      }
+      const btn = e.target && e.target.closest ? e.target.closest('[data-adm]') : null;
+      if (!btn) return;
+      const uid = btn.dataset.uid;
+      const act = btn.dataset.adm;
+      try {
+        if (act === 'disable') {
+          const why = prompt('停用原因（会显示给他看，可留空）', '');
+          if (why == null) return;
+          const j = await adminApi('/api/admin/users/' + encodeURIComponent(uid) + '/disabled', {
+            method: 'POST', body: JSON.stringify({ disabled: true, reason: why }),
+          }).then(x => x.json());
+          if (!j.ok) throw new Error(j.message || '操作失败');
+          toast('已停用，该用户已下线');
+        } else if (act === 'enable') {
+          const j = await adminApi('/api/admin/users/' + encodeURIComponent(uid) + '/disabled', {
+            method: 'POST', body: JSON.stringify({ disabled: false }),
+          }).then(x => x.json());
+          if (!j.ok) throw new Error(j.message || '操作失败');
+          toast('已恢复使用');
+        } else if (act === 'reset') {
+          const np = prompt('输入新密码（至少 6 位）', '');
+          if (np == null) return;
+          if (String(np).length < 6) { toast('密码至少 6 位'); return; }
+          const j = await adminApi('/api/admin/users/' + encodeURIComponent(uid) + '/password', {
+            method: 'POST', body: JSON.stringify({ password: np }),
+          }).then(x => x.json());
+          if (!j.ok) throw new Error(j.message || '操作失败');
+          toast('密码已重置，他需要用新密码重新登录');
+        }
+        await reloadAdminUsers();
+      } catch (err) { toast(err.message || '操作失败'); }
+    });
   }
 
   // ================= 主界面 =================
@@ -587,6 +708,7 @@
     { key: 'pool', id: 'view-pool', name: '共享池', hint: '同学之间互相给的学习资料，取用是复制进自己空间', load: () => loadPool() },
     { key: 'projects', id: 'view-projects', name: '项目', hint: '一个项目 = 一组资料 + 一条学习指令', load: () => loadProjects() },
     { key: 'dash', id: 'view-dash', name: '看板', hint: '先看清楚做了什么，再决定补哪里', load: () => loadDash() },
+    { key: 'parent', id: 'view-parent', name: '家长视角', hint: '同一批事实，换一个"我能做什么"的问法', load: () => loadParent() },
     { key: 'skills', id: 'view-skills', name: '能力', hint: '每个能力都是一套「怎么教你」的方法', load: () => loadSkills() },
     { key: 'memory', id: 'view-memory', name: '记忆', hint: '让 AI 记住你的偏好与学习状态', hidden: true, load: () => loadMemory() },
     { key: 'settings', id: 'view-settings', name: '设置', hint: '个人资料 · 主题 · 字号', hidden: true, load: () => renderSettings() },
@@ -940,8 +1062,12 @@
     let out = '';
     if (pages.length) {
       out += '<div class="msg-net on">已读取 ' + pages.length + ' 个链接' +
-        '<div class="net-list">' + pages.map(p =>
-          '<a href="' + esc(p.url) + '" target="_blank" rel="noopener">' + esc(String(p.title || p.url).slice(0, 70)) + '</a>').join('') + '</div></div>';
+        '<div class="net-list">' + pages.map(p => {
+          // 图片直链没有标题，直接显示 URL 会被截断成没信息的一段开头 ——
+          // 标一句"图片（已识别文字）"，学生才知道 AI 真的看了那张图。
+          const label = p.image ? '图片（已识别文字）' : String(p.title || p.url);
+          return '<a href="' + esc(p.url) + '" target="_blank" rel="noopener">' + esc(label.slice(0, 70)) + '</a>';
+        }).join('') + '</div></div>';
     }
     if (errs.length) {
       out += '<div class="msg-net off">' + errs.length + ' 个链接没读到：' +
@@ -1909,14 +2035,22 @@
     box.hidden = false;
     box.innerHTML = '<span class="td-label">本次对话的资料</span>' + S.tempDocs.map(d =>
       '<span class="td-chip' + (d.status === 'failed' ? ' bad' : '') + '" data-id="' + esc(d.id) + '" title="' +
-      (d.status === 'parsing' ? '解析中…' : (d.error || d.filename)) + '">' +
-      esc(d.filename) + (d.status === 'parsing' ? ' · 解析中' : (d.status === 'failed' ? ' · 解析失败' : '')) +
+      (d.status === 'parsing' ? 'AI 正在识别文字' + (d.progress ? ' · ' + d.progress + '%' : '') : (d.error || d.filename)) + '">' +
+      esc(d.filename) +
+      (d.status === 'parsing' ? (d.progress ? ' · 识别中 ' + d.progress + '%' : ' · 识别中') : '') +
+      (d.status === 'failed' ? ' · 解析失败' : '') +
       '<button data-td="' + esc(d.id) + '" type="button" title="移除">×</button></span>').join('') +
       '<span class="td-note">聊完随对话一起删除，不会进正式资料库</span>';
   }
-  async function pollTempDocs(cid, ids, n) {
-    const k = n || 0;
-    if (k > 40) return;
+  const tdSleep = ms => new Promise(r => setTimeout(r, ms));
+  /**
+   * 轮询临时资料状态。
+   * ★ 原来是「连打 40 次、中间不等待」—— 对扫描件识别（几分钟起）根本不够用，
+   *   而且会在资料还没就绪时就弹「资料已就绪」。改成按**时间**给截止（默认 15 分钟）、
+   *   每 2 秒看一次，并且只在真的全部就绪（或确实失败）时才提示。
+   */
+  async function pollTempDocs(cid, ids, deadline) {
+    const until = deadline || (Date.now() + 15 * 60 * 1000);
     try {
       const r = await api('/api/conversations/' + cid + '/temp-documents/status', { method: 'POST', body: { ids: ids } });
       const st = r.status || {};
@@ -1925,11 +2059,23 @@
         S.tempDocs = S.tempDocs.map(d => (st[d.id] ? Object.assign({}, d, st[d.id]) : d));
         renderTempDocs();
       }
-      if (pending.length) return pollTempDocs(cid, ids, k + 1);
-      if (cid === S.convId) toast('资料已就绪，可以开始问了');
+      if (!pending.length) {
+        const bad = ids.filter(id => st[id] && st[id].status === 'failed');
+        if (cid === S.convId) {
+          toast(bad.length ? '有资料没能识别出文字，可移除后重传' : '资料已就绪，可以开始问了');
+        }
+        return;
+      }
+      if (Date.now() > until) {
+        if (cid === S.convId) toast('资料还在识别中，识别完就能用了');
+        return;
+      }
+      await tdSleep(2000);
+      return pollTempDocs(cid, ids, until);
     } catch (e) {
-      toast('临时文档状态查询失败，稍后会自动重试');
-      return pollTempDocs(cid, ids, k + 1);
+      if (Date.now() > until) { toast('临时文档状态查询失败，稍后会自动重试'); return; }
+      await tdSleep(3000);
+      return pollTempDocs(cid, ids, until);
     }
   }
 
@@ -2576,6 +2722,586 @@
     });
   }
 
+  // ================= 周报（批次16 + 增强）=================
+  /**
+   * 周报的立场和日报一样：**摆事实，不给分数**。
+   * 后端 weekly.js 把 summary/coverage/days/notScored/limits 全都算好了，
+   * 而且每一项都带「算不出来就说算不出来」的口径。前端这里只负责**把它们摆出来** ——
+   * 算好了不显示，等于这份诚实白做了。
+   *
+   * ★ 三条不能破的规矩（与日报共用）：
+   *   ① 数字每次现算，周报不落库；
+   *   ② value === null 时显示「—」+ 说明，**绝不补 0**；
+   *   ③ 不评分，并把「为什么不给分数」明明白白写出来。
+   */
+  const WEEK_MAX_DAYS = 7;      // 与 server/weekly.js 的 MAX_DAYS 对齐（前端先拦，省一次 400）
+  let weeklyRange = null;       // { from, to } —— 记忆用户选的区间，切走再回来不丢
+
+  function todayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  /** 两个日期字符串相差几天（含首尾），用于前端先拦超范围 */
+  function daysBetween(a, b) {
+    const pa = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(a || ''));
+    const pb = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(b || ''));
+    if (!pa || !pb) return null;
+    const ta = new Date(Number(pa[1]), Number(pa[2]) - 1, Number(pa[3])).getTime();
+    const tb = new Date(Number(pb[1]), Number(pb[2]) - 1, Number(pb[3])).getTime();
+    return Math.round((tb - ta) / 86400000) + 1;
+  }
+  function defaultWeeklyRange() {
+    const to = todayStr();
+    return { from: dayShift(to, -(WEEK_MAX_DAYS - 1)), to: to };
+  }
+
+  async function loadWeekly(range) {
+    const box = $('#weeklyBox');
+    if (!box) return;
+    const r2 = range || weeklyRange || defaultWeeklyRange();
+    weeklyRange = r2;
+    box.innerHTML = '<div class="skel" style="height:150px"></div>';
+    try {
+      const r = await api('/api/weekly?from=' + encodeURIComponent(r2.from) + '&to=' + encodeURIComponent(r2.to));
+      box.innerHTML = renderWeekly(r.report);
+    } catch (e) {
+      // 失败时把选择器**留着**，否则用户改了一次坏日期就再也改不回来
+      box.innerHTML = weeklyShell(r2, '<div class="w-empty">' + HL.esc(e.message) + '</div>');
+    }
+    // ★ 这两块必须等 renderWeekly 把占位节点写进 DOM 之后再取数 ——
+    //   提前调会让 $('#weeklyNoteSec') / $('#weeklyHist') 取到 null，
+    //   然后函数静默 return（本项目踩过"建容器先于取数"的坑），页面上一片空白还零报错。
+    await Promise.all([loadWeeklyNote(r2), loadWeeklyHist()]);
+  }
+
+  /** 外壳（头部 + 日期选择器）。单独抽出来，是为了让"取数失败"也能保留选择器。 */
+  function weeklyShell(range, body, isCurrentWeek) {
+    const from = range.from, to = range.to;
+    const quick = (label, f, t) => {
+      const on = (from === f && to === t) ? ' on' : '';
+      return '<button class="w-q' + on + '" type="button" data-wfrom="' + HL.esc(f) + '" data-wto="' + HL.esc(t) + '">' + HL.esc(label) + '</button>';
+    };
+    // 上一个 7 天窗口：从当前窗口往前再推 7 天
+    const prevTo = dayShift(from, -1);
+    const prevFrom = dayShift(prevTo, -(WEEK_MAX_DAYS - 1));
+    return '<div class="w-header">' +
+        '<h3>学习周报' + (isCurrentWeek ? ' <span class="w-cur">本周</span>' : '') + '</h3>' +
+        '<div class="w-pick">' +
+          '<input class="w-date" type="date" id="wFrom" value="' + HL.esc(from) + '" title="起始日期">' +
+          '<span class="w-tilde">–</span>' +
+          '<input class="w-date" type="date" id="wTo" value="' + HL.esc(to) + '" title="结束日期">' +
+        '</div>' +
+      '</div>' +
+      '<div class="w-quicks">' +
+        quick('最近 7 天', dayShift(todayStr(), -6), todayStr()) +
+        quick('上周', prevFrom, prevTo) +
+        '<span class="w-limit">最多 7 天</span>' +
+      '</div>' +
+      body;
+  }
+
+  /** 「—」和「0」是两件事：null 一律走这里，附上为什么 */
+  function wNum(v, unit, unknownText) {
+    if (v === null || v === undefined) {
+      return '<b class="w-na">—</b><i class="w-why">' + HL.esc(unknownText || '暂不能确定') + '</i>';
+    }
+    return '<b>' + HL.esc(String(v)) + (unit || '') + '</b>';
+  }
+  function renderWeekly(report) {
+    const s = report.summary;
+    const cov = report.coverage || { totalCards: 0, bySubject: [] };
+
+    // —— ① 概览数字：每一张都能看出"算得出来 / 算不出来" ——
+    const kpi = [
+      {
+        v: s.records, l: '留下的记录', u: '条',
+        why: s.records === 0 ? '这几天还没有任何记录' : null,
+      },
+      {
+        v: s.reviews, l: '练知识卡', u: '次',
+        why: s.reviews === 0 ? '这几天没有练习记录' : null,
+      },
+      {
+        v: s.accuracy === null ? null : s.accuracy + '%', l: '答对的比例',
+        sub: s.accuracy === null ? null : '对 ' + s.right + ' / 错 ' + s.wrong,
+        why: '没有一次判得出对错的练习，算不出比例',
+      },
+      {
+        v: s.cardsTouched, l: '碰过的知识卡', u: '张',
+        why: s.cardsTouched === 0 ? '这几天没有复习过任何卡' : null,
+      },
+      {
+        v: s.daysWithRecord + ' / ' + report.daysCount, l: '有记录的天数',
+      },
+    ].map(c => '<div class="w-kpi">' + wNum(c.v, c.u, c.why) +
+      '<span>' + HL.esc(c.l) + '</span>' +
+      (c.sub ? '<em class="w-sub">' + HL.esc(c.sub) + '</em>' : '') + '</div>').join('');
+
+    // —— ② 逐天：哪天留了记录、哪天是空的（空的那天如实显示为空，不补 0）——
+    // ★ 类名刻意用 .w-blank，不用 .w-na ——
+    //   .w-na 的语义是"这个指标算不出来"（KPI 卡上的「—」），
+    //   "这天完全没有记录"是另一回事（不是算不出来，是那天确实没发生）。
+    //   两者共用一个类名会让**样式无法区分**、**测试选择器也只能连着一起抓**，
+    //   这正是记忆里那条"同一属性名被两种语义复用 = 定时炸弹"的同类。
+    const days = report.days.map(d => {
+      const okCount = d.keyMetrics.filter(m => m.key === 'accuracy')[0];
+      const isToday = d.date === todayStr();
+      const dateShort = d.date.replace(/^\d{4}-/, '').replace('-', '/');
+      return '<div class="w-day' + (d.hasRecord ? ' has' : '') + '" title="' + HL.esc(d.headline) + '">' +
+        '<i>' + HL.esc(dateShort) + (isToday ? ' 今天' : '') + '</i>' +
+        (d.hasRecord
+          ? '<b>' + d.keyMetrics.filter(m => m.key === 'records')[0].value + '</b>'
+          : '<b class="w-blank">空</b>') +
+        '<em>' + (okCount && okCount.value !== null ? okCount.value + '%' : '—') + '</em>' +
+        '</div>';
+    }).join('');
+
+    // —— ③ 按科目：只摆对错次数，不给"科目评分" ——
+    const subs = s.subjects.length
+      ? s.subjects.map(x => {
+          const judged = x.right + x.wrong;
+          const pct = judged ? Math.round(x.right / judged * 100) : null;
+          const w = judged ? Math.round(x.wrong / judged * 100) : 0;
+          return '<div class="w-sub-row">' +
+            '<span class="w-sub-n">' + HL.esc(x.subject) + '</span>' +
+            '<div class="w-bar" title="' + HL.esc('对 ' + x.right + ' 次，错 ' + x.wrong + ' 次') + '">' +
+              '<i class="w-bar-ok" style="width:' + (pct === null ? 0 : 100 - w) + '%"></i>' +
+            '</div>' +
+            '<span class="w-sub-v">' + HL.esc('练 ' + x.reviews + ' 次') +
+              (pct === null ? '' : ' · ' + pct + '%') + '</span>' +
+          '</div>';
+        }).join('')
+      : '<div class="dim w-none">这几天没有按科目分得开的练习记录。</div>';
+
+    // —— ④ 卡住的卡：跨天累计没答对的，这才是"该补哪里" ——
+    const stuck = s.stuckCards.length
+      ? s.stuckCards.map(c =>
+        '<div class="w-stuck"><span class="w-stuck-t">' + HL.esc(c.knowledge) + '</span>' +
+        '<span class="w-stuck-n">' + c.wrongs + ' 次没答对</span></div>').join('')
+      : '<div class="dim w-none">这几天没有反复卡住的卡。</div>';
+
+    // —— ⑤ 覆盖 ——
+    const coverTxt = cov.totalCards
+      ? '这几天碰过 <b>' + cov.totalCards + '</b> 张不同的卡，分布在 ' + cov.bySubject.length + ' 个科目：' +
+        cov.bySubject.map(x => HL.esc(x.subject) + ' ' + x.count + ' 张').join(' · ')
+      : '这几天没有碰过任何知识卡。';
+
+    // —— ⑥ 为什么不给分数 / 这份周报不能证明什么（结构化条目，不是散文）——
+    const ns = report.notScored.map(x =>
+      '<div class="d-ns-i"><b>' + HL.esc(x.title) + '</b><p>' + HL.esc(x.why) + '</p></div>').join('');
+    const lim = report.limits.map(x => '<li>' + HL.esc(x) + '</li>').join('');
+
+    const body =
+      '<div class="w-grid">' + kpi + '</div>' +
+
+      '<div class="w-sec"><h4>这几天</h4><div class="w-days">' + days + '</div>' +
+        '<p class="w-note">灰色的是没有留下记录的那天 —— 那是「没有记录」，不是「0 条」。</p></div>' +
+
+      '<div class="w-sec"><h4>按科目</h4>' + subs + '</div>' +
+
+      '<div class="w-sec"><h4>卡住的卡 <span>跨天累计没答对 2 次以上</span></h4>' + stuck + '</div>' +
+
+      '<div class="w-sec"><h4>覆盖</h4><p class="w-cover">' + coverTxt + '</p></div>' +
+
+      // —— ⑦ 这周我写下的一句话（批次22）——
+      // ★ 这是全页**唯一会被存进数据库的东西**（其余数字全部现算）。
+      //   所以它单独成块、明确标注"会被保存"，跟纯事实的其余部分视觉上分开。
+      '<div class="w-sec w-note-sec" id="weeklyNoteSec"></div>' +
+
+      '<details class="d-fold"><summary>为什么这份周报不给分数</summary><div class="d-ns">' + ns + '</div></details>' +
+      '<details class="d-fold"><summary>这份周报不能证明什么</summary><ul class="d-lim">' + lim + '</ul></details>' +
+
+      // —— ⑧ 历史周报（批次22）——
+      '<div class="w-sec" id="weeklyHistSec"><h4>以前的周报 <span>只存了我写下的那段</span></h4><div id="weeklyHist"></div></div>';
+
+    return weeklyShell({ from: report.from, to: report.to }, body, report.isCurrentWeek);
+  }
+
+  // ================= 历史周报（批次22）=================
+  /**
+   * 这里只做两件事：
+   *   ① 显示/编辑**这一段日期**里"人写的那段"（唯一落库的东西）；
+   *   ② 列出以前的周报，点开可以回看那周写了什么。
+   *
+   * ★ 为什么历史里能回看的只有"我写的那段"：
+   *   数字是现算的，回看数字没有意义（它本来就每次都对）；
+   *   有意义的恰恰是"当时的我注意到了什么" —— 那是无法重算的。
+   *   而且回看时那些数字**仍是按当时那段日期现算的**，不是复制品。
+   */
+  let weeklyNoteRange = null;   // 编辑中的 note 属于哪一段
+
+  async function loadWeeklyNote(range) {
+    const sec = $('#weeklyNoteSec');
+    if (!sec) return;
+    const r2 = range || weeklyRange || defaultWeeklyRange();
+    weeklyNoteRange = r2;
+    try {
+      const r = await api('/api/weekly/note?from=' + encodeURIComponent(r2.from) + '&to=' + encodeURIComponent(r2.to));
+      sec.innerHTML = renderWeeklyNote(r.note, r2);
+    } catch (e) {
+      sec.innerHTML = '<h4>这周我写下的一句话</h4><p class="w-note">' + HL.esc(e.message) + '</p>';
+    }
+  }
+
+  function renderWeeklyNote(note, range) {
+    const isFinal = !!(note && note.status === 'final');
+    const a = (note && note.answers) || {};
+    const noticed = typeof a.noticed === 'string' ? a.noticed : '';
+    const next = typeof a.next === 'string' ? a.next : '';
+    const qs = [['noticed', '这周我注意到什么', '哪一天、哪件事让你觉得"哦，原来是这样"', noticed],
+                ['next', '下周想试什么', '一个小小的、你真的会去做的事', next]];
+
+    if (isFinal) {
+      // 定稿后只读 —— 与日报同规矩：定稿是"当时写的"，不该被后来改写
+      const rd = qs.map(q =>
+        '<div class="w-rd"><b>' + HL.esc(q[1]) + '</b><p>' +
+          (q[3].trim() ? HL.esc(q[3]) : '<span class="dim">（这条空着）</span>') + '</p></div>').join('');
+      return '<h4>这周我写下的一句话 <span class="w-final-tag">已定稿 · 只读</span></h4>' + rd +
+        '<p class="w-note">定稿之后就改不了了 —— 这是「当时的我」写的，后来的我不该替它改。</p>';
+    }
+
+    const fields = qs.map(q =>
+      '<label class="w-note-l"><b>' + HL.esc(q[1]) + '</b>' +
+        '<input type="text" maxlength="2000" data-nk="' + q[0] + '" ' +
+          'placeholder="' + HL.esc(q[2]) + '" value="' + HL.esc(q[3]) + '"></label>').join('');
+
+    return '<h4>这周我写下的一句话 <span>会保存，其余数字不会</span></h4>' +
+      '<p class="w-note">上面所有数字都是每次重新算的，存不下来也不用存。下面这两句是你写的 —— ' +
+        '它才是这一周里唯一"别人算不出来"的东西。</p>' +
+      fields +
+      '<div class="w-note-act">' +
+        '<button class="btn sm" type="button" id="wNoteSave">先存着</button>' +
+        '<button class="btn sm" type="button" id="wNoteFinal">定稿（之后不能改）</button>' +
+      '</div>';
+  }
+
+  function collectWeeklyNote() {
+    const out = {};
+    $$('#weeklyNoteSec [data-nk]').forEach(el => { out[el.dataset.nk] = el.value || ''; });
+    return out;
+  }
+
+  async function saveWeeklyNote(finalize) {
+    const r2 = weeklyNoteRange || weeklyRange || defaultWeeklyRange();
+    const btn = finalize ? $('#wNoteFinal') : $('#wNoteSave');
+    if (btn) { btn.disabled = true; btn.textContent = finalize ? '定稿中…' : '保存中…'; }
+    try {
+      await api('/api/weekly/note/' + r2.from + '/' + r2.to, {
+        method: 'POST',
+        body: JSON.stringify({ answers: collectWeeklyNote(), finalize: !!finalize }),
+      });
+      toast(finalize ? '已定稿，这周的记录就留在这儿了' : '已保存');
+      await loadWeeklyNote(r2);
+      await loadWeeklyHist();      // 定稿后历史里要立刻出现这一条
+    } catch (e) {
+      toast(e.message);
+      if (btn) { btn.disabled = false; btn.textContent = finalize ? '定稿（之后不能改）' : '先存着'; }
+    }
+  }
+
+  async function loadWeeklyHist() {
+    const box = $('#weeklyHist');
+    if (!box) return;
+    try {
+      const r = await api('/api/weekly/history');
+      const ws = r.weeks || [];
+      if (!ws.length) {
+        box.innerHTML = '<div class="dim w-none">还没有以前的周报。写过并定稿之后，会一条条攒在这里。</div>';
+        return;
+      }
+      box.innerHTML = ws.map(w => {
+        const a = w.answers || {};
+        const parts = [];
+        if (a.noticed && a.noticed.trim()) parts.push('注意到：' + a.noticed);
+        if (a.next && a.next.trim()) parts.push('想试：' + a.next);
+        const head = w.from.replace(/^\d{4}-/, '') + ' ~ ' + w.to.replace(/^\d{4}-/, '');
+        // ★ 这里的数字是**现算**的（后端 history 每次都重算），不是当初存下来的
+        return '<button class="w-hist" type="button" data-hfrom="' + HL.esc(w.from) + '" data-hto="' + HL.esc(w.to) + '">' +
+          '<div class="w-hist-h"><b>' + HL.esc(head) + '</b>' +
+            '<em class="w-hist-st' + (w.status === 'final' ? ' final' : '') + '">' +
+              (w.status === 'final' ? '已定稿' : '草稿') + '</em></div>' +
+          '<div class="w-hist-n">记录 ' + w.records + ' 条 · 练卡 ' + w.reviews + ' 次' +
+            (w.accuracy === null ? ' · 比例算不出' : ' · 对 ' + w.accuracy + '%') + '</div>' +
+          (parts.length
+            ? '<div class="w-hist-t">' + HL.esc(parts.join('　·　')) + '</div>'
+            : '<div class="w-hist-t dim">这一周没有写下什么。</div>') +
+          '</button>';
+      }).join('');
+    } catch (e) {
+      box.innerHTML = '<div class="dim w-none">' + HL.esc(e.message) + '</div>';
+    }
+  }
+
+  function bindWeeklyNote() {
+    // ★★ 这里**不能**加 `if (!$('#weeklyNoteSec')) return;` 这样的守卫，
+    //    即使它看起来"更安全"。#weeklyNoteSec 是 loadWeekly() **异步**渲染出来的，
+    //    而 bindWeeklyNote() 在 loadDash 里同步调用 —— 那一刻它必然还不存在。
+    //    加了守卫 ⇒ 函数静默 return ⇒ 事件根本没绑上 ⇒ 点历史条目毫无反应、
+    //    控制台也不报任何错（本套件实测抓到过：6 项断言全红在"点了没反应"上）。
+    //    真正要绑的宿主是 #weeklyBox，它在 loadDash 里是先建好的。
+    const box = $('#weeklyBox');
+    if (!box) return;
+    box.addEventListener('click', e => {
+      const t = e.target;
+      if (!t) return;
+      if (t.id === 'wNoteSave') { saveWeeklyNote(false); return; }
+      if (t.id === 'wNoteFinal') {
+        if (!confirm('定稿之后就改不了了，确定吗？')) return;
+        saveWeeklyNote(true); return;
+      }
+      const h = t.closest ? t.closest('.w-hist') : null;
+      if (h) loadWeekly({ from: h.dataset.hfrom, to: h.dataset.hto });
+    });
+  }
+
+  /** 日期选择器 / 快捷按钮的事件（绑在 #weeklyBox 上，它每次整体重建） */
+  function bindWeekly() {
+    const box = $('#weeklyBox');
+    if (!box) return;
+    box.addEventListener('change', e => {
+      const t = e.target;
+      if (!t || !t.classList.contains('w-date')) return;
+      const from = $('#wFrom') ? $('#wFrom').value : '';
+      const to = $('#wTo') ? $('#wTo').value : '';
+      if (!from || !to) return;
+      if (to < from) return toast('结束日期不能早于开始日期');
+      const n = daysBetween(from, to);
+      if (n === null) return toast('日期格式不对');
+      if (n > WEEK_MAX_DAYS) return toast('一次最多看 ' + WEEK_MAX_DAYS + ' 天，把范围收窄一点');
+      loadWeekly({ from: from, to: to });
+    });
+    box.addEventListener('click', e => {
+      const t = e.target && e.target.closest ? e.target.closest('.w-q') : null;
+      if (!t) return;
+      loadWeekly({ from: t.dataset.wfrom, to: t.dataset.wto });
+    });
+  }
+
+  // ================= 家长视角（批次20）=================
+  /**
+   * 家长视角与看板**共用同一批事实**（activity / card_reviews / 已定稿日报），
+   * 但问的问题不同：
+   *   看板：我做了什么？（学习者视角，给复习队列、成长曲线、弱项计数）
+   *   家长：我能做什么？（回答"要不要管、管什么、怎么说"）
+   * ⇒ 所以这里**不重复看板的数字**。同一个数摆两遍，家长会以为那是两个指标。
+   *
+   * ★ 三条硬规矩在这里的落点：
+   *   ① 数字每次现算（后端已经保证，前端不缓存进 localStorage）；
+   *   ② value === null ⇒ 显示说明文字，**绝不补 0**；
+   *      （`accuracy: null` 拼成 "0%" 是最容易犯的错 —— 见 renderParent 里的判断）
+   *   ③ 不评分，并且把「为什么这里没有分数」放在最显眼处之一。
+   *
+   * ★ 家长端最容易做歪的地方：把它做成"监看仪表盘"。
+   *   所以这一段代码里**刻意没有**：排名、平均线、时长、同比红绿箭头、
+   *   "已掌握 N 张"这类存量数字（存量会变成家长的目标）。
+   */
+  const PARENT_MAX_DAYS = 31;   // 与 server/parent.js 的上限对齐（前端先拦，省一次 400）
+  let parentRange = null;       // { from, to } —— 切走再回来不丢
+
+  function defaultParentRange() {
+    const to = todayStr();
+    return { from: dayShift(to, -(PARENT_MAX_DAYS - 1)), to: to };
+  }
+
+  async function loadParent(range) {
+    const box = $('#parentBody');
+    if (!box) return;
+    const r2 = range || parentRange || defaultParentRange();
+    parentRange = r2;
+    box.innerHTML = '<div class="skel" style="height:120px;margin-bottom:10px"></div><div class="skel" style="height:180px"></div>';
+    try {
+      const r = await api('/api/parent?from=' + encodeURIComponent(r2.from) + '&to=' + encodeURIComponent(r2.to));
+      box.innerHTML = renderParent(r.view);
+    } catch (e) {
+      box.innerHTML = parentShell(r2, '<div class="w-empty">' + HL.esc(e.message) + '</div>');
+    }
+  }
+
+  /** 外壳（头部 + 日期选择器）。与周报同构，失败时也保留选择器。 */
+  function parentShell(range, body) {
+    const from = range.from, to = range.to;
+    const quick = (label, f, t) => {
+      const on = (from === f && to === t) ? ' on' : '';
+      return '<button class="w-q' + on + '" type="button" data-pfrom="' + HL.esc(f) + '" data-pto="' + HL.esc(t) + '">' + HL.esc(label) + '</button>';
+    };
+    const prevTo = dayShift(from, -1);
+    const prevFrom = dayShift(prevTo, -6);
+    return '<div class="w-header">' +
+        '<h3>家长视角</h3>' +
+        '<div class="w-pick">' +
+          '<input class="w-date" type="date" id="pFrom" value="' + HL.esc(from) + '" title="起始日期">' +
+          '<span class="w-tilde">–</span>' +
+          '<input class="w-date" type="date" id="pTo" value="' + HL.esc(to) + '" title="结束日期">' +
+        '</div>' +
+      '</div>' +
+      '<div class="w-quicks">' +
+        quick('最近 7 天', dayShift(todayStr(), -6), todayStr()) +
+        quick('最近 30 天', dayShift(todayStr(), -29), todayStr()) +
+        quick('上一段', prevFrom, prevTo) +
+        '<span class="w-limit">最多 ' + PARENT_MAX_DAYS + ' 天</span>' +
+      '</div>' +
+      body;
+  }
+
+  /** 家长视角专属的「算不出来」渲染：和 wNum 一样，null 给说明不给 0 */
+  function pNum(v, unit, unknownText) {
+    if (v === null || v === undefined) {
+      return '<b class="w-na">—</b><i class="w-why">' + HL.esc(unknownText || '算不出来') + '</i>';
+    }
+    return '<b>' + HL.esc(String(v)) + (unit || '') + '</b>';
+  }
+
+  function renderParent(v) {
+    const rh = v.rhythm, mv = v.movement;
+
+    // —— ① 一句话总结：这是整页的"产品灵魂"，必须排在最上面 ——
+    //    三件套：发生了什么 / 这正常吗 / 你能做什么。
+    //    ★ markdown 的 ** ** 在这里手动转成 <b>，否则会把星号原样显示给家长。
+    function em(s) {
+      return HL.esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    }
+    const head = '<div class="p-head p-tone-' + HL.esc(v.headline.tone) + '">' +
+        '<div class="p-head-t">' + em(v.headline.text) + '</div>' +
+        '<p class="p-head-p">' + em(v.headline.plain) + '</p>' +
+        '<div class="p-head-a"><span>你可以做的</span>' + em(v.headline.action) + '</div>' +
+      '</div>';
+
+    // —— ② 节奏：有记录的天数（**不是时长**）——
+    const perDay = rh.perDay.length
+      ? rh.perDay.map(d => '<span class="p-day" title="' + HL.esc(d.date) + ' 有 ' + d.actions + ' 条记录">' +
+          '<i>' + HL.esc(d.date.replace(/^\d{4}-/, '').replace('-', '/')) + '</i><b>' + d.actions + '</b></span>').join('')
+      : '<div class="dim w-none">这段时间里，这个工具没有被打开过。</div>';
+
+    const gapTxt = rh.gapDays === null
+      ? '<b class="w-na">—</b><i class="w-why">还没有任何记录，算不出"停了几天"</i>'
+      : (rh.gapDays === 0
+        ? '<b>今天</b><i class="w-why">今天有记录</i>'
+        : '<b>' + rh.gapDays + ' 天前</b><i class="w-why">最后一次看到记录</i>');
+
+    const rhythmBlock =
+      '<div class="w-grid">' +
+        '<div class="w-kpi">' + pNum(rh.activeDays + ' / ' + rh.totalDays, ' 天', null) + '<span>有记录的天数</span>' +
+          '<em class="w-sub">' + (rh.activeDays === 0 ? '这段时间一条记录也没有' : '不是"学了多久"，是"哪几天留下了记录"') + '</em></div>' +
+        '<div class="w-kpi">' + pNum(rh.longestStreak, ' 天',
+          rh.activeDays === 0 ? '没有记录，算不出连续天数' : null) + '<span>最长连着几天</span></div>' +
+        '<div class="w-kpi">' + gapTxt + '<span>距最近一次</span></div>' +
+      '</div>' +
+      '<div class="p-days">' + perDay + '</div>' +
+      // ★ 主动说明"为什么不用时长" —— 家长脑子里默认的指标就是时长，不说清他会往里套
+      '<details class="d-fold"><summary>为什么这里不显示"学了多长时间"</summary>' +
+        '<div class="d-ns"><div class="d-ns-i"><b>时长算不准，所以不给</b>' +
+        '<p>这个工具只在页面开着的时候记一笔，关掉页面就断了。拿它算时长会**系统性少算** —— ' +
+        '而一个偏低的时长比不给时长更糟：会让没发生的事看起来像发生了。' +
+        '所以这里只说"哪几天留下了记录"，这个数能被忠实反映。</p></div></div></details>';
+
+    // —— ③ 在不在推进：**过程指标**，不是存量 ——
+    //    ★ 刻意不给"已掌握 N 张"：存量会被家长拿去做比较，而他没有参照系。
+    const mvBlock =
+      '<div class="w-grid">' +
+        '<div class="w-kpi">' + pNum(mv.judged, ' 次',
+          mv.judged === 0 ? '这段时间没有判得出对错的练习' : null) + '<span>判得出对错的练习</span></div>' +
+        '<div class="w-kpi">' + pNum(mv.accuracy === null ? null : mv.accuracy, '%', mv.accuracyUnknown) +
+          '<span>答对的比例</span>' +
+          // ★ 用后端给的 `wrong`，不要在前端算 `judged - right`：
+          //   前端算就会在字段缺失时得到 NaN 并**直接印到界面上**（实测印过「对 1 / 错 NaN」）。
+          //   后端已经是唯一口径，前端只负责显示。
+          (mv.accuracy === null ? '' : '<em class="w-sub">对 ' + mv.right + ' / 错 ' + mv.wrong + '</em>') + '</div>' +
+        '<div class="w-kpi">' + pNum(mv.advanced, ' 张', mv.advancedUnknown) +
+          '<span>复习过的卡里走到"快记住"以上的</span>' +
+          (mv.advanced === null ? '' : '<em class="w-sub">这段时间复习过 ' + mv.touched + ' 张</em>') + '</div>' +
+      '</div>' +
+      '<p class="w-note">"往前走了"这件事，比"掌握了多少"更值得看 —— ' +
+      '前者说明他在反复重来，后者只是一个越攒越大的数字。' +
+      '这个工具的设计就是让卡**反复出现**，所以同一张卡错两三次是过程的一部分。</p>' +
+      (mv.accuracy === null && mv.judged === 0
+        ? '<div class="p-unknown-box"><b>为什么正确率是「—」</b>' +
+          '<p>' + HL.esc(mv.accuracyUnknown) + '。这不是 0% —— ' +
+          '"全错"和"没有可判的练习"是两件事。这天他可能只是在看书、在提问，还没到做题那一步。</p></div>'
+        : '');
+
+    // —— ④ 卡在哪里：给"怎么帮"，**不给知识点原文** ——
+    const help = v.helpPoints.length
+      ? v.helpPoints.map(h =>
+        '<div class="p-help">' +
+          '<div class="p-help-h"><span class="p-help-a">' + HL.esc(h.area) + '</span>' +
+            '<span class="p-help-n">反复遇到 ' + h.wrongs + ' 次</span></div>' +
+          '<p class="p-help-t">' + HL.esc(h.advice) + '</p>' +
+        '</div>').join('')
+      : '<div class="dim w-none">这段时间没有反复卡住的地方 —— 这是好事，不用做什么。</div>';
+
+    const helpBlock = help +
+      // ★ 主动说明"为什么不告诉你是哪个知识点" —— 否则家长会觉得这页在藏着掖着
+      '<details class="d-fold"><summary>为什么不告诉你具体是哪个知识点</summary>' +
+        '<div class="d-ns"><div class="d-ns-i"><b>因为一旦知道，就很难不去考他</b>' +
+        '<p>如果你拿着"判别式与根的个数"去问他，那件事就从"他自己想弄明白"变成了"他要向你证明"。' +
+        '自学一旦变成被考，孩子下一步就会开始挑**能答对的**去学。' +
+        '所以这里只说到科目 —— 你想帮的话，问一句"这块卡在哪一步"就够了。</p></div></div></details>';
+
+    // —— ⑤ 他自己写的那段（只读，且只读已定稿的）——
+    const notes = v.notes.length
+      ? v.notes.map(n => {
+          const d = n.date.replace(/^\d{4}-/, '').replace('-', '/');
+          return '<div class="p-note"><div class="p-note-d">' + HL.esc(d) + '</div>' +
+            n.answers.map(a => '<p class="p-note-l"><span>' +
+              HL.esc({ goal: '目标', state: '状态', process: '过程', adjust: '调整' }[a.key] || a.key) +
+              '</span>' + HL.esc(a.text) + '</p>').join('') +
+          '</div>';
+        }).join('')
+      : '<div class="dim w-none">这段时间他没有写下定稿的日报。定稿的那份才会出现在这里 —— 写着写着又改主意的草稿不算。</div>';
+
+    // —— ⑥ 我答不了什么（这一页最诚实、也最值钱的部分）——
+    const cannot = v.cannotSay.map(c =>
+      '<div class="p-cannot-i"><b>' + HL.esc(c.q) + '</b><p>' + em(c.a) + '</p></div>').join('');
+
+    // —— ⑦ 承诺边界 ——
+    const privacy = '<div class="p-priv">' +
+        '<b>这一页看不到：' + v.privacy.notShown.map(HL.esc).join(' · ') + '</b>' +
+        '<p>' + em(v.privacy.why) + '</p></div>';
+
+    // —— ⑧ 现在有什么（存量，只摆不评）——
+    const nowBlock = '<div class="p-now">' +
+      [['知识卡', v.now.cards, '张'], ['已掌握', v.now.mastered, '张'], ['到期待复习', v.now.due, '张'],
+       ['资料', v.now.documents, '份'], ['对话', v.now.conversations, '次']]
+        .map(x => '<span class="p-now-i"><b>' + x[1] + '</b><i>' + HL.esc(x[0]) + '</i></span>').join('') +
+      '</div>';
+
+    const body =
+      head +
+      '<div class="w-sec"><h4>这周的节奏</h4>' + rhythmBlock + '</div>' +
+      '<div class="w-sec"><h4>在不在往前走</h4>' + mvBlock + '</div>' +
+      '<div class="w-sec"><h4>可以帮上忙的地方 <span>只说到科目，不点破知识点</span></h4>' + helpBlock + '</div>' +
+      '<div class="w-sec"><h4>他自己写的那段 <span>已定稿的才显示</span></h4>' + notes + '</div>' +
+      '<div class="w-sec"><h4>现在有什么</h4>' + nowBlock +
+        '<p class="w-note">存量数字只说明"攒了多少"，不说明"学得怎么样"。</p></div>' +
+      '<details class="d-fold" open><summary>这一页答不了的三件事</summary><div class="d-ns">' + cannot + '</div></details>' +
+      privacy;
+
+    return parentShell({ from: v.range.from, to: v.range.to }, body);
+  }
+
+  /** 日期选择器 / 快捷按钮（绑在 #parentBody 上，它每次整体重建） */
+  function bindParent() {
+    const box = $('#parentBody');
+    if (!box) return;
+    box.addEventListener('change', e => {
+      const t = e.target;
+      if (!t || !t.classList.contains('w-date')) return;
+      const from = $('#pFrom') ? $('#pFrom').value : '';
+      const to = $('#pTo') ? $('#pTo').value : '';
+      if (!from || !to) return;
+      if (to < from) return toast('结束日期不能早于开始日期');
+      const n = daysBetween(from, to);
+      if (n === null) return toast('日期格式不对');
+      if (n > PARENT_MAX_DAYS) return toast('一次最多看 ' + PARENT_MAX_DAYS + ' 天，把范围收窄一点');
+      loadParent({ from: from, to: to });
+    });
+    box.addEventListener('click', e => {
+      const t = e.target && e.target.closest ? e.target.closest('.w-q') : null;
+      if (!t) return;
+      loadParent({ from: t.dataset.pfrom, to: t.dataset.pto });
+    });
+  }
+
   // ================= 看板（P5）=================
   async function loadDash() {
     // ★ 单滚动容器：日报（#dailyBox）和看板（#dashPanels）都住在 #dashBody 里。
@@ -2584,8 +3310,16 @@
     //   现在只在 #dashBody 上留一个滚动条，两者在它内部按文档流往下排。
     //   #dashPanels 是后写看板内容的落点，避免重写看板时把 #dailyBox 一起冲掉。
     const box = $('#dashBody');
-    box.innerHTML = '<div id="dailyBox"></div>' +
+    box.innerHTML = '<div id="weeklyBox"></div><div id="dailyBox"></div>' +
       '<div id="dashPanels"><div class="skel" style="height:120px;margin-bottom:10px"></div><div class="skel" style="height:180px"></div></div>';
+    // ★ 事件必须绑在 #weeklyBox 的**外层稳定容器** #dashBody 上吗？不需要 ——
+    //   #weeklyBox 本身是每次 loadDash 新建的，但 bindWeekly() 也在同一个同步块里
+    //   紧跟其后调用，绑定发生在它被替换之前，所以不会重复绑定、也不会绑到旧节点上。
+    //   （反面教材是 #dailyBox：它的内容被异步重建，委托就必须挂在 #dashBody 上。）
+    bindWeekly();
+    bindWeeklyNote();
+    // loadWeekly 内部会在渲染完之后自己去取 note / history（见那里的注释）
+    loadWeekly();
     loadDaily(dailyDate || '');
     const panels = $('#dashPanels');
     let d, rep;
@@ -2624,6 +3358,32 @@
       series: [{ name: '张数', values: [t.learning, t.almost, t.mastered, t.retired], color: 'var(--pri)' }],
     });
 
+    // —— 阶段进度可视化（批次16 增强）——
+    // ★ 为什么用"推进条"而不是再画一张柱状图：
+    //   柱状图回答的是"各状态各有多少张"，推进条回答的是"整批卡走到哪一步了"。
+    //   日报的「数字不等于掌握」那句文案已经把结论说死了 ——
+    //   **真正的证据是知识卡的状态推进**，那就得让它以"推进"的形态出现。
+    //   数据源就是 dashboard.totals()，不需要任何新接口。
+    const stages = [
+      { k: 'learning', n: '还在学', c: 'var(--pri)' },
+      { k: 'almost',   n: '快记住', c: '#D97706' },
+      { k: 'mastered', n: '已掌握', c: '#16A34A' },
+      { k: 'retired',  n: '不用复习', c: '#94A3B8' },
+    ];
+    const cardTotal = stages.reduce((s, x) => s + (Number(t[x.k]) || 0), 0);
+    const progress = cardTotal
+      ? '<div class="pg-bar">' + stages.map(x => {
+          const v = Number(t[x.k]) || 0;
+          if (!v) return '';
+          return '<i style="width:' + (v / cardTotal * 100).toFixed(2) + '%;background:' + x.c + '" title="' +
+            HL.esc(x.n + ' ' + v + ' 张') + '"></i>';
+        }).join('') + '</div>' +
+        '<div class="pg-lg">' + stages.map(x =>
+          '<span><i style="background:' + x.c + '"></i>' + HL.esc(x.n) +
+          ' <b>' + (Number(t[x.k]) || 0) + '</b></span>').join('') + '</div>' +
+        '<p class="w-note">掌握是<b>迁移</b>，不是堆积：卡从「还在学」一步步走到「已掌握」，靠的是间隔复习（5 连对 → 5·14·60 天）后的推进，不是某一天多做几道。</p>'
+      : '<div class="dim" style="font-size:.86rem">还没有知识卡，收几张之后这里会显示它们走到哪一步了。</div>';
+
     const weak = d.weakPoints.length
       ? d.weakPoints.map(w =>
         '<div class="weak-i"><span class="w-t">' + HL.esc(w.knowledge) +
@@ -2647,6 +3407,7 @@
       '<ul class="report-lines">' + rep.lines.map(l => '<li>' + HL.esc(l) + '</li>').join('') + '</ul></div>' +
       '<div class="dash-panel"><h3>学习动作曲线</h3>' + curveChart + '</div>' +
       '<div class="dash-panel"><h3>知识卡状态分布 <span>掌握是迁移，不是堆积</span></h3>' + statusChart + '</div>' +
+      '<div class="dash-panel"><h3>阶段进度 <span>整批卡走到哪一步了</span></h3>' + progress + '</div>' +
       '<div class="dash-panel"><h3>该补哪里 <span>按"没答对次数"排</span></h3>' + weak + '</div>' +
       '<div class="dash-panel"><h3>最近做了什么</h3>' + recent + '</div>';
   }
@@ -2781,7 +3542,7 @@
     const ws = (S.en && S.en.words) || [];
     const box = $('#enList');
     if (!ws.length) {
-      box.innerHTML = '<div class="empty"><p>还没有单词。</p><p class="dim">点右上角「批量导入」，把课本上的词表整段粘进来就行。一行一个，中文意思可写可不写。</p></div>';
+      box.innerHTML = '<div class="empty"><p>还没有单词。</p><p class="dim">点右上角「批量导入」，把词表整段粘进来就行。一行一个，中文意思可写可不写。</p></div>';
       return;
     }
     box.innerHTML = ws.map(w =>
@@ -3246,7 +4007,26 @@
   }
   function catList() { return (S.kbDocs || []).filter(inCurrentCat); }
 
-  async function loadKb() {
+  let kbPollTimer = null;
+  let kbPollLeft = 0;
+  /**
+   * 有资料在识别时自动刷新列表。
+   * 扫描件要识别几分钟到几十分钟，让用户手动点刷新等于没做 —— 识别完自己变成「已就绪」才对。
+   * ★ 上限必须**比后端任务上限还长**：服务端 `JOB_MAX_MS.ocr` 是 45 分钟，
+   *   一本 130 页的书实测要 20 分钟左右（限流时会更久）。原来按 400 次（20 分钟）封顶，
+   *   正好卡在识别差不多的时刻 —— 表现是"进度条停住不动了"，看着像卡死。
+   *   现在给到 1100 次（约 55 分钟）留出余量；真正的兜底是服务端的对账：
+   *   任务被清掉后文档会被捞成可重试，`parsing` 不会永远转下去。
+   */
+  function scheduleKbPoll(hasParsing) {
+    if (kbPollTimer) { clearTimeout(kbPollTimer); kbPollTimer = null; }
+    if (!hasParsing) { kbPollLeft = 0; return; }
+    if (kbPollLeft <= 0) kbPollLeft = 1100;
+    kbPollLeft--;
+    kbPollTimer = setTimeout(() => { kbPollTimer = null; loadKb(true); }, 3000);
+  }
+
+  async function loadKb(silent) {
     try {
       const [cats, docs] = await Promise.all([api('/api/kb/categories'), api('/api/kb/documents')]);
       S.kbCats = cats.categories || [];
@@ -3256,7 +4036,8 @@
       renderKbTree();
       renderKbState();
       renderKbList();
-    } catch (e) { toast(e.message); }
+      scheduleKbPoll((S.kbDocs || []).some(d => d.state === 'parsing'));
+    } catch (e) { if (!silent) toast(e.message); }
   }
 
   function treeRow(id, name, docs, cap) {
@@ -3307,7 +4088,7 @@
         (kbState ? '这个状态下没有资料。'
           : kbCat === NONE ? '没有未归类的资料。'
             : kbCat ? '这个本子还是空的。' : '还没有资料。') + '</p>' +
-        '<p class="dim">把课本、讲义、试卷传进来，AI 讲的时候会引用你自己的资料，并说明出自哪一份。</p></div>';
+        '<p class="dim">把你的资料传进来 —— 讲义、笔记、试卷、随堂记录都行。AI 讲的时候会引用它们，并说明出自哪一份。</p></div>';
       return;
     }
     box.innerHTML = list.map(d =>
@@ -3320,10 +4101,19 @@
       (d.projects.length ? ' · 已挂到 ' + d.projects.map(p => esc(p.name)).join('、') : '') +
       '</div>' +
       (d.error ? '<div class="doc-err">' + esc(d.error) + '</div>' : '') +
+      // 扫描件识别中：告诉用户"在动、走到哪了、大概还要多久"。
+      // 一本 130 页的书要几分钟，只给个转圈会让人以为它卡死了。
+      (d.state === 'parsing'
+        ? '<div class="doc-prog"><i style="width:' + Math.max(3, Math.min(100, d.progress || 0)) + '%"></i></div>' +
+          '<div class="doc-prog-t">AI 正在逐页识别文字' + (d.pages ? ' · 共 ' + d.pages + ' 页' : '') +
+          (d.progress ? ' · ' + d.progress + '%' : '') + '</div>'
+        : '') +
       '</div>' +
-      '<span class="chip ' + (STATE_CHIP[d.state] || 'learning') + '">' + esc(d.stateText) + '</span>' +
+      '<span class="chip ' + (STATE_CHIP[d.state] || 'learning') + '">' +
+      (d.state === 'parsing' && d.progress ? '识别中 ' + d.progress + '%' : esc(d.stateText)) + '</span>' +
       (d.state === 'ready' ? '<button class="btn sm" data-doc="view" type="button">看全文</button>' : '') +
-      (d.state === 'todo' ? '<button class="btn sm" data-doc="reparse" type="button">重新解析</button>' : '') +
+      (d.state === 'todo' ? '<button class="btn sm" data-doc="reparse" type="button">' +
+        (d.kind === 'pdf' ? '重新识别' : '重新解析') + '</button>' : '') +
       '<button class="btn ghost sm" data-doc="proj" type="button">加入项目</button>' +
       '<button class="btn ghost sm" data-doc="move" type="button">移到…</button>' +
       '<button class="btn ghost sm" data-doc="del" type="button">删除</button>' +
@@ -3474,7 +4264,7 @@
           ((d.projects || []).length ? ' · 已在 ' + d.projects.length + ' 个项目' : '') + '</span></button>').join('') +
         '</div>' +
         '<div class="dim" style="font-size:.8rem;margin-top:6px">已选 <b id="pjDocN">' + picked.length + '</b> 份 · 点一下切换</div>'
-      : '<div class="dim" style="font-size:.85rem">知识库里还没有资料。先去「知识库」把课本、讲义或试卷传上来，再回来挂给这个项目。</div>';
+      : '<div class="dim" style="font-size:.85rem">知识库里还没有资料。先去「知识库」把你的资料传上来，再回来挂给这个项目。</div>';
     openModal(p ? '编辑项目' : '新建项目',
       '<div class="field"><label>项目名称</label><input id="pjName" maxlength="40" value="' + (p ? HL.esc(p.name) : '') + '" placeholder="如：这学期物理"></div>' +
       '<div class="field"><label>学习指令</label><textarea class="pc-input" id="pjIns" style="min-height:6em" placeholder="如：先用问题引导我，别直接讲；每讲完一段让我自己复述">' + (p ? HL.esc(p.instructions) : '') + '</textarea></div>' +
@@ -3948,6 +4738,15 @@
       }
       if (!files.length && cd.files) for (let i = 0; i < cd.files.length; i++) files.push(cd.files[i]);
       if (!files.length) return;                 // 纯文本 → 交给浏览器默认行为
+      // ★ 剪贴板里**同时**有文字和文件时不能接管：从 Word / WPS / 网页复制题目，
+      //   给出来的常常是「文字 + 同一段内容的渲染图」。一接管文字就被吞掉，
+      //   用户以为发过去的是整段题目，实际只过去一张 AI 看不见的图 ——
+      //   这正是"粘贴的文档 AI 没读"的另一半原因。有文字就放行文本粘贴。
+      const plain = String((cd.getData ? cd.getData('text/plain') : '') || '').trim();
+      if (plain) {
+        if (files.length) toast('已按文字粘贴（剪贴板里还带了一张图，要插图请用「＋」选原文件）');
+        return;
+      }
       e.preventDefault();
       // 截图粘贴过来的 Blob 往往没有有意义的名字，一律叫 "image.png"，
       // 发多张就分不清哪张是哪张了 —— 按序号补个中文名。
@@ -4102,6 +4901,11 @@
     $('#dashDays').addEventListener('change', loadDash);
     // 日报：事件委托只绑一次（内容每次重写，逐个 bind 会漏）
     bindDaily();
+
+    // 家长视角（批次20）：和看板一样，事件委托绑在 #parentBody 上 ——
+    // 它每次 loadParent 整体重建，逐个 bind 会漏（日报踩过这个坑）。
+    $('#parentRefresh').addEventListener('click', () => loadParent());
+    bindParent();
 
     // 能力中心
     $('#skillCats').addEventListener('click', ev => {
@@ -4409,6 +5213,7 @@
 
     bindLand();
     bindApp();
+    initAdminPanel();
 
     // 开机自检：拿不到健康检查就不要假装能用
     fetch('/api/health').then(x => x.json()).then(h => {

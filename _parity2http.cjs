@@ -58,7 +58,7 @@ function startServer() {
   return child;
 }
 async function waitReady(ms) {
-  const until = Date.now() + (ms || 15000);
+  const until = Date.now() + (ms || 60000);
   while (Date.now() < until) {
     try { const r = await fetch(BASE + '/api/health'); if (r.ok) return await r.json(); } catch (e) {}
     await new Promise(r => setTimeout(r, 150));
@@ -118,7 +118,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /** 轮询消息直到进入终态 */
 async function waitFinal(token, id, ms) {
-  const until = Date.now() + (ms || 30000);
+  const until = Date.now() + (ms || 60000);
   while (Date.now() < until) {
     const r = await GET('/api/messages/' + id, token);
     if (r.status === 200 && ['done', 'aborted', 'error'].indexOf(r.body.message.status) >= 0) return r.body.message;
@@ -204,9 +204,13 @@ async function waitFinal(token, id, ms) {
     ok('收到多条 delta（真的是流式）', deltas.length > 5, deltas.length);
     ok('收到 done 事件且状态 done', !!done1 && done1.data.status === 'done', JSON.stringify(done1 && done1.data));
     ok('done 带 length 与 replyId', done1.data.length > 0 && done1.data.replyId === meta1.data.replyId);
-    ok('meta 回传联网状态（未配通道时如实说明）',
-      meta1.data.webSearch && meta1.data.webSearch.ok === false && /未联网/.test(meta1.data.webSearch.message),
-      JSON.stringify(meta1.data.webSearch));
+    // meta 回传联网状态。以前"没配通道"必然 OK:false；现在内置通道默认开着，
+    // 所以这一条只守住"失败时必须带着'未联网'字样"，成功时要求真的有结果。
+    ok('meta 回传联网状态', !!meta1.data.webSearch, JSON.stringify(meta1.data.webSearch));
+    const ws = meta1.data.webSearch || {};
+    ok('   └ 成功就要带结果，没成功就要说"未联网"（不许静默降级）',
+      (ws.ok === true && Array.isArray(ws.results)) || (ws.ok === false && /未联网/.test(ws.message || '')),
+      JSON.stringify(ws).slice(0, 160));
 
     const rid1 = meta1.data.replyId;
     const rm1 = await GET('/api/messages/' + rid1, T);
@@ -226,7 +230,12 @@ async function waitFinal(token, id, ms) {
     ok('断流时确实还没收到 done', cut.events.filter(e => e.ev === 'done').length === 0);
     const rid2 = cutMeta.data.replyId;
     // 服务端应该继续生成到完成 —— 而不是把半截存下来
-    const final2 = await waitFinal(T, rid2, 40000);
+    // ★ 窗口从 40 秒放宽到 90 秒：这条断言本身没问题，但它是**整条回归里对时间最敏感的一条**
+    //   （模拟回复是按时序吐 delta 的，机器一忙就吐得慢）。
+    //   实测：单独跑这套是 112/0 全绿；放进 --skip-browser 全量回归里，
+    //   前面 _platformtest 已经吃掉 306 秒、机器负载拉满，40 秒就不够了，表现为 4 条假红。
+    //   判据仍然是"最终必须变成 done"，只是不再把"机器忙"误报成"服务端没接着生成"。
+    const final2 = await waitFinal(T, rid2, 90000);
     ok('断流后服务端仍把回复生成完', final2 && final2.status === 'done', final2 && final2.status);
     ok('从 DB 捞到的是完整回复（不是半截）', final2 && final2.content.length > 0, final2 && final2.content.length);
     const partialAtCut = cut.events.filter(e => e.ev === 'delta').map(e => e.data.text).join('');
@@ -293,9 +302,23 @@ async function waitFinal(token, id, ms) {
     ok('删除不存在的消息返回 deleted=false', (await DEL('/api/messages/m_没有', T)).body.deleted === false);
 
     group('K. 联网搜索');
+    // ★ 2026-10-02 语义变了：内置通道默认开着，不再因为"没配环境变量"就判不可用。
+    //   **不变的红线**是：失败必须如实说 "未联网"，不许静默降级成"感觉像搜过"。
     const se = await POST('/api/search', { query: '中考数学' }, T);
-    ok('未配通道时如实返回不可用', se.status === 200 && se.body.ok === false && se.body.reason === 'UNAVAILABLE');
-    ok('降级文案是人话', se.body.message === '联网搜索暂时不可用，本条回答未联网', se.body.message);
+    const seOK = se.status === 200 && se.body.ok === true && Array.isArray(se.body.results);
+    const seHonest = se.status === 200 && se.body.ok === false && /未联网/.test(se.body.message || '');
+    ok('联网要么搜到、要么如实说没联网（不许静默降级）', seOK || seHonest, JSON.stringify(se.body).slice(0, 160));
+    ok('断网时文案是人话', !seHonest || se.body.message === '联网搜索暂时不可用，本条回答未联网', se.body.message);
+    ok('不再有"只因为没配环境变量"就不可用这种事', !seHonest || se.body.reason !== 'UNAVAILABLE', se.body.reason);
+
+    // 注："显式关闭内置通道 ⇒ DISABLED" 这条在 _parity2check.cjs 里验 ——
+    // 这里的服务是**独立子进程**，测试进程改 env 传不进去（这是 HTTP 套件的边界）。
+    ok('来源可分辨（便于排查到底走的哪条通道）', !seOK || !!(se.body.engine), JSON.stringify(se.body.engine));
+    ok('搜到就有 URL 和摘要（能被引、能点进去）',
+      !seOK || se.body.results.every(r => r.url && /^https?:/.test(r.url)), JSON.stringify(se.body.results).slice(0, 140));
+    ok('摘要里不留 HTML 标签（不然会污染给模型的上下文）',
+      !seOK || se.body.results.every(r => !/</.test(r.title || '') && !/[a-z]+\/?>/.test(r.snippet || '')),
+      JSON.stringify(se.body.results).slice(0, 200));
 
     group('L. 上传（图片 / 文档）');
     const up = await POST('/api/upload/image', { files: [{ filename: '照片.png', dataBase64: PNG }] }, T);

@@ -87,10 +87,14 @@ function computeSummary(list) {
 
     f.revs.forEach(r => { allTouched.add(r.cardId); });
 
-    f.stuck.forEach(s => {
-      const existing = stuckMap[s.cardId];
-      if (!existing || existing.wrongs < s.wrongs) {
-        stuckMap[s.cardId] = { cardId: s.cardId, knowledge: s.knowledge, wrongs: s.wrongs, ids: s.ids };
+    // 卡住的卡：跨多天累计 wrongs（不是"同一天内"，周报看的是这周整体）
+    f.revs.forEach(r => {
+      if (r.result === 'wrong') {
+        if (!stuckMap[r.cardId]) {
+          stuckMap[r.cardId] = { cardId: r.cardId, knowledge: r.knowledge, wrongs: 0, ids: [] };
+        }
+        stuckMap[r.cardId].wrongs++;
+        stuckMap[r.cardId].ids.push(r.id);
       }
     });
 
@@ -104,7 +108,7 @@ function computeSummary(list) {
   });
 
   const accuracy = totalJudged ? Math.round(totalRight / totalJudged * 100) : null;
-  const stuckList = Object.values(stuckMap).sort((a, b) => b.wrongs - a.wrongs);
+  const stuckList = Object.values(stuckMap).filter(x => x.wrongs >= 2).sort((a, b) => b.wrongs - a.wrongs);
 
   return {
     records: totalRecords,
@@ -189,4 +193,185 @@ function isCurrentWeek(fromTs, toTs) {
   return fromTs <= nowTs && nowTs <= toTs;
 }
 
-module.exports = { build };
+// ============================================================================
+// 历史周报（批次22）：存取「人写的那段」+ 数字逐项溯源
+// ============================================================================
+// ★ 这一段的唯一职责是**存取人写的内容**。任何汇总数字都不从这里出 ——
+//   它们一律由 build() 现算。见文件头三条硬规矩，以及 db.js 里 weekly_reports 的注释。
+
+/** 人写的那两问。刻意不是四问：周报的粒度是"一周"，把日报的四问抄过来会逼人写四遍一样的话。 */
+const WEEK_QUESTIONS = [
+  { key: 'noticed', label: '这周我注意到什么', hint: '哪一天、哪件事让你觉得"哦，原来是这样"' },
+  { key: 'next', label: '下周想试什么', hint: '一个小小的、你真的会去做的事' },
+];
+const WEEK_KEYS = WEEK_QUESTIONS.map(q => q.key);
+const WEEK_ANSWER_MAX = 2000;
+
+/** 把 (from,to) 规范化成一段合法周并将它作为主键的一部分。非法就抛，不猜。 */
+function normRange(from, to) {
+  const fromTs = daily.parseDay(from);
+  const toTs = daily.parseDay(to);
+  if (!fromTs || !toTs) throw new Error('invalid_range');
+  if (toTs < fromTs) throw new Error('invalid_range');
+  const days = Math.round((toTs - fromTs) / DAY) + 1;
+  if (days > MAX_DAYS) throw new Error('range_too_long');
+  return { from: daily.dayKey(fromTs), to: daily.dayKey(toTs) };
+}
+
+/**
+ * ★ 数字逐项溯源：把 summary 里的某个数字拆回它背后的原始记录。
+ * 汇总口径必须与 computeSummary() **逐字对齐** —— 否则会出现"谁都不算错但对不上"的假红。
+ * 返回的每一条都带 date，这样前端能指出"这个数是哪几天凑出来的"。
+ */
+function evidenceByMetric(spaceId, from, to, metric) {
+  const r = normRange(from, to);
+  const metricKey = String(metric || '').toLowerCase();
+
+  // 逐天取 facts，再按 metric 决定从每天里取什么
+  const days = [];
+  let cur = daily.parseDay(r.from);
+  const end = daily.parseDay(r.to);
+  while (cur <= end) {
+    const date = daily.dayKey(cur);
+    days.push({ date: date, f: daily.facts(spaceId, date) });
+    cur += DAY;
+  }
+
+  const items = [];
+  if (metricKey === 'reviews' || metricKey === 'accuracy' || metricKey === 'right' || metricKey === 'wrong') {
+    // 这四项同源：都指向 card_reviews。accuracy 只取判得出对错的，与分母口径一致。
+    days.forEach(d => {
+      d.f.revs.forEach(rv => {
+        if (metricKey === 'right' && rv.result !== 'right') return;
+        if (metricKey === 'wrong' && rv.result !== 'wrong') return;
+        if (metricKey === 'accuracy' && rv.result === 'unknown') return;
+        items.push({
+          date: d.date, kind: 'review', id: rv.id, cardId: rv.cardId,
+          knowledge: rv.knowledge, subject: rv.subject, result: rv.result, time: rv.time,
+        });
+      });
+    });
+  } else if (metricKey === 'records') {
+    days.forEach(d => {
+      // activity 的原始 id 链在 facts 的 evidence 里，按天取回
+      const ev = (daily.metrics(d.f).filter(m => m.key === 'records')[0] || {}).evidence;
+      if (!ev || !ev.ids || !ev.ids.length) return;
+      const got = daily.evidenceByIds(spaceId, d.date, ev.kind, ev.ids);
+      (got.items || []).forEach(it => items.push(Object.assign({ date: d.date }, it)));
+    });
+  } else if (metricKey === 'cards' || metricKey === 'coverage') {
+    // 覆盖：本周碰过的每一张卡只出现一次（与 computeCoverage 的去重口径一致）
+    const seen = {};
+    days.forEach(d => {
+      d.f.revs.forEach(rv => {
+        if (seen[rv.cardId]) return;
+        seen[rv.cardId] = true;
+        items.push({
+          date: d.date, kind: 'card', id: rv.cardId, cardId: rv.cardId,
+          knowledge: rv.knowledge, subject: rv.subject,
+        });
+      });
+    });
+  } else {
+    throw new Error('unknown_metric');
+  }
+
+  return {
+    metric: metricKey,
+    from: r.from, to: r.to,
+    count: items.length,
+    items: items.slice(0, 300),
+    truncated: items.length > 300,
+  };
+}
+
+// ---------- 存取（只存"人写的那部分"）----------
+
+function getNote(spaceId, from, to) {
+  const r = normRange(from, to);
+  const row = D.get('SELECT * FROM weekly_reports WHERE space_id = ? AND week_from = ? AND week_to = ?',
+    spaceId, r.from, r.to);
+  if (!row) return null;
+  let answers = {};
+  try { answers = row.answers_json ? JSON.parse(row.answers_json) : {}; } catch (e) {}
+  return {
+    id: row.id, from: row.week_from, to: row.week_to, status: row.status,
+    answers: answers, updatedAt: row.updated_at, finalizedAt: row.finalized_at,
+  };
+}
+
+function saveDraft(spaceId, from, to, answers) {
+  const r = normRange(from, to);
+  const src = answers && typeof answers === 'object' ? answers : {};
+  const clean = {};
+  WEEK_KEYS.forEach(k => { if (typeof src[k] === 'string') clean[k] = src[k].slice(0, WEEK_ANSWER_MAX); });
+
+  const existing = D.get('SELECT id, status FROM weekly_reports WHERE space_id = ? AND week_from = ? AND week_to = ?',
+    spaceId, r.from, r.to);
+  const now = D.now();
+  if (existing) {
+    // ★ 已定稿的周报不再接受草稿覆盖 —— 与日报同规矩：定稿是"当时写的"，不该被后来改写。
+    if (existing.status === 'final') return getNote(spaceId, r.from, r.to);
+    D.run('UPDATE weekly_reports SET answers_json = ?, updated_at = ? WHERE id = ?',
+      JSON.stringify(clean), now, existing.id);
+  } else {
+    D.run('INSERT INTO weekly_reports(id,space_id,week_from,week_to,status,answers_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+      D.uid('wr_'), spaceId, r.from, r.to, 'draft', JSON.stringify(clean), now, now);
+  }
+  return getNote(spaceId, r.from, r.to);
+}
+
+function finalize(spaceId, from, to, answers) {
+  const r = normRange(from, to);
+  if (answers && typeof answers === 'object') saveDraft(spaceId, r.from, r.to, answers);
+  const existing = D.get('SELECT id FROM weekly_reports WHERE space_id = ? AND week_from = ? AND week_to = ?',
+    spaceId, r.from, r.to);
+  const now = D.now();
+  if (!existing) {
+    D.run('INSERT INTO weekly_reports(id,space_id,week_from,week_to,status,answers_json,created_at,updated_at,finalized_at) VALUES(?,?,?,?,?,?,?,?,?)',
+      D.uid('wr_'), spaceId, r.from, r.to, 'final', '{}', now, now, now);
+  } else {
+    D.run('UPDATE weekly_reports SET status = ?, updated_at = ?, finalized_at = ? WHERE id = ?',
+      'final', now, now, existing.id);
+  }
+  return getNote(spaceId, r.from, r.to);
+}
+
+/**
+ * 历史周报列表。只列**有内容或已定稿**的，并且**排除"当前正在看的那一周"**。
+ *
+ * ★ 为什么必须排除当前周：这一块在界面上叫「以前的周报」。
+ *   把正在编辑的这一周也列进去，用户会看到"以前的周报"里有他刚刚在写的东西 ——
+ *   文案与内容不符，而且他点进去会从"编辑态"跳回"编辑态"（看起来像没反应）。
+ *   判据是 `to === 今天`：一段区间只要能到今天就说明它包含当下，不算"以前"。
+ *
+ * 每项还带上那段日期的关键合计 —— 但**这些数字是现算的**，不来自表里任何一列。
+ */
+function history(spaceId, limit) {
+  const n = Math.max(1, Math.min(60, Number(limit) || 26));
+  const today = daily.dayKey(D.now());
+  const rows = D.all(
+    `SELECT week_from, week_to, status, answers_json, updated_at, finalized_at
+     FROM weekly_reports WHERE space_id = ? AND week_to < ? ORDER BY week_to DESC LIMIT ?`,
+    spaceId, today, n);
+  return rows.map(row => {
+    let a = {};
+    try { a = row.answers_json ? JSON.parse(row.answers_json) : {}; } catch (e) {}
+    const filled = WEEK_KEYS.filter(k => a[k] && a[k].trim()).length;
+    // 数字现算：只给两个最能说明"那周有没有东西"的，不给整份 summary（那是 build 的活）
+    const built = build(spaceId, row.week_from, row.week_to);
+    return {
+      from: row.week_from, to: row.week_to, status: row.status,
+      filled: filled, updatedAt: row.updated_at, finalizedAt: row.finalized_at,
+      records: built.summary.records,
+      reviews: built.summary.reviews,
+      accuracy: built.summary.accuracy,
+      answers: a,
+    };
+  });
+}
+
+module.exports = {
+  build, history, getNote, saveDraft, finalize, evidenceByMetric,
+  WEEK_QUESTIONS, WEEK_KEYS, MAX_DAYS,
+};

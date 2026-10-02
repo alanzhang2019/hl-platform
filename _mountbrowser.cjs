@@ -108,9 +108,33 @@ function freePort() {
   page.on('pageerror', e => errs.push('pageerror: ' + e.message));
 
   const maskClosed = () => page.waitForFunction(() => document.getElementById('mask').hidden === true, null, { timeout: 8000 });
+  /**
+   * 进知识库的某个二级分区。
+   *
+   * ★ 为什么不能"点一次就等"（全量回归里暴露的竞态）：
+   *   进主界面的时序是 `#app` 变可见 → …一长串 await… → `renderKbTabs()`
+   *   → `switchView('chat')`，而 `#app:not([hidden])` 在**第一步**就满足了。
+   *   机器忙的时候（全量回归前面已跑了二十几分钟）那串 await 拖得很长，
+   *   这时候点「知识库」会被后面那句 `switchView('chat')` **顶回去**，
+   *   表现为 `waiting for locator('#view-kb:not([hidden])') to be visible` 超时。
+   *   单跑（机器空闲）100% 绿，全量回归里必红 —— 典型的环境相关假红。
+   *
+   *   修法：**等真正的前置条件 + 被覆盖时重试**，而不是加长固定 sleep。
+   *   `.kb-tab` 出现 ⇒ `renderKbTabs()` 已跑过 ⇒ 那串 await 已经结束，
+   *   之后就不会再有 `switchView('chat')` 来覆盖了。点完再确认一次视图真的切过去。
+   */
   const openSub = async (key) => {
-    await page.click('.nav-i[data-view="kb"]');
-    await page.waitForSelector('#view-kb:not([hidden])');
+    await page.waitForFunction(() => document.querySelectorAll('#kbTabs .kb-tab').length > 0, null, { timeout: 20000 });
+    let done = false;
+    for (let attempt = 0; attempt < 4 && !done; attempt++) {
+      await page.click('.nav-i[data-view="kb"]');
+      try {
+        await page.waitForFunction(() => { const kb = document.querySelector('#view-kb'); return kb && !kb.hidden; },
+          null, { timeout: 4000 });
+        done = true;
+      } catch (e) { /* 被顶回去了，再点一次 */ }
+    }
+    if (!done) throw new Error('点了 4 次都没能停在知识库视图（可能被 switchView 反复覆盖）');
     await page.click('#kbTabs [data-sub="' + key + '"]');
     await page.waitForTimeout(200);
   };

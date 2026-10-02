@@ -641,6 +641,23 @@ button { cursor: pointer; }
 .row-card b { font-size: .93rem; }
 .row-card .dim { font-size: .78rem; }
 
+/* ---- 管理后台：异地运维用得到，要能一眼看清"这是谁、能不能登" ---- */
+.adm-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.adm-tab {
+  padding: .35em .85em; border-radius: 20px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--dim); font-size: .84rem; cursor: pointer;
+}
+.adm-tab.on { background: var(--pri-soft); color: var(--pri); border-color: var(--pri); font-weight: 600; }
+
+.adm-user {
+  display: block; margin-bottom: 10px; align-items: unset;
+  border-left: 3px solid var(--line);
+}
+.adm-user:has(.chip.almost) { border-left-color: var(--warn); }
+.adm-u-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.adm-u-m { font-size: .76rem; line-height: 1.7; word-break: break-all; }
+.adm-u-act { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+
 /* ================= 弹窗 / 提示 ================= */
 .mask {
   position: fixed; inset: 0; z-index: 80; background: rgba(12, 16, 26, .5);
@@ -705,6 +722,138 @@ button { cursor: pointer; }
    ★ 都写 flex:none —— 默认 flex-shrink:1 时，两块内容一高就会被压缩，
      又变回"各自滚动、两块都看不全"。 */
 #dailyBox, #dashPanels { flex: none; }
+
+/* 周报（批次16 + 增强） */
+#weeklyBox { margin-bottom: 10px; padding: 14px; background: var(--panel); border-radius: 12px; border: 1px solid var(--line); }
+
+/* 头部：标题 + 日期选择器。
+   ★ 这里不用 flex-wrap —— 中文/日期混排时 wrap 会让「–」分隔符单独掉到下一行。 */
+.w-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.w-header h3 { margin: 0; font-size: .92rem; font-weight: 600; color: var(--txt); white-space: nowrap; }
+.w-cur { font-size: .68rem; font-weight: 500; color: var(--pri); background: var(--pri-soft); border-radius: 999px; padding: 1px 7px; margin-left: 4px; vertical-align: 1px; }
+.w-dates { font-size: .74rem; color: var(--dim); }
+.w-pick { display: flex; align-items: center; gap: 5px; }
+.w-date {
+  font-size: .74rem; padding: 4px 7px; border: 1px solid var(--line-2); border-radius: var(--r-xs);
+  background: var(--panel); color: var(--txt); min-width: 0;
+}
+.w-date:focus { outline: none; border-color: var(--pri); }
+.w-tilde { color: var(--dim2); font-size: .74rem; }
+
+/* 快捷区间 */
+.w-quicks { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.w-q {
+  font-size: .72rem; padding: 3px 10px; border: 1px solid var(--line-2); border-radius: 999px;
+  background: var(--panel); color: var(--dim); white-space: nowrap;
+}
+.w-q:hover { border-color: var(--pri); color: var(--pri); }
+.w-q.on { background: var(--pri-soft); border-color: var(--pri); color: var(--pri); font-weight: 600; }
+.w-limit { font-size: .68rem; color: var(--dim2); margin-left: 2px; }
+
+.w-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; align-items: stretch; }
+/* ★ 卡片必须等高：#weeklyBox 被截图/导出时是按元素高度裁的，
+   高度参差会让"算不出来的那张"只露出半截说明字。 */
+.w-kpi {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  text-align: center; padding: 10px 6px; background: var(--bg); border-radius: 8px; border: 1px solid var(--line);
+}
+.w-kpi b { display: block; font-size: 1.25rem; font-weight: 700; color: var(--pri); margin-bottom: 2px; line-height: 1.2; }
+/* ★ 算不出来的数字用灰色 + 比正文还小的说明字，视觉上就"低一档" ——
+   补一个 0 会被误读成"这周一次都没对"，那是完全不同的一件事。 */
+.w-kpi b.w-na { color: var(--dim2); font-weight: 600; }
+.w-kpi span { font-size: .72rem; color: var(--dim); line-height: 1.3; }
+.w-kpi .w-why { display: block; font-style: normal; font-size: .64rem; color: var(--dim2); line-height: 1.35; margin-top: 3px; }
+.w-kpi .w-sub { display: block; font-style: normal; font-size: .66rem; color: var(--dim2); margin-top: 3px; }
+
+/* 分区小节 */
+.w-sec { margin-top: 16px; }
+.w-sec h4 { margin: 0 0 8px; font-size: .82rem; font-weight: 600; color: var(--txt); }
+.w-sec h4 span { font-weight: 400; font-size: .7rem; color: var(--dim2); margin-left: 6px; }
+.w-none { font-size: .82rem; }
+.w-note { margin: 8px 0 0; font-size: .72rem; color: var(--dim2); line-height: 1.6; }
+.w-cover { margin: 0; font-size: .82rem; color: var(--dim); line-height: 1.7; }
+.w-cover b { color: var(--txt); }
+
+/* 逐天条：有记录=实心，没记录=灰色空心。
+   ★ 「空」和「0」在视觉上必须不同 —— 这正是周报规矩②在界面上的体现。 */
+.w-days { display: flex; gap: 6px; flex-wrap: wrap; }
+.w-day {
+  flex: 1 1 0; min-width: 58px; padding: 8px 4px; text-align: center;
+  background: var(--panel-2); border: 1px dashed var(--line-2); border-radius: 8px;
+}
+.w-day.has { background: var(--pri-soft); border-style: solid; border-color: var(--pri); }
+.w-day i { display: block; font-style: normal; font-size: .66rem; color: var(--dim); margin-bottom: 3px; white-space: nowrap; }
+.w-day.has i { color: var(--pri); }
+.w-day b { display: block; font-size: 1rem; font-weight: 700; color: var(--txt); line-height: 1.2; }
+/* 「空」不是「算不出来的 —」：那天只是没发生任何事。同族样式、不同类名。 */
+.w-day b.w-blank { color: var(--dim2); font-size: .78rem; font-weight: 500; }
+.w-day em { display: block; font-style: normal; font-size: .66rem; color: var(--dim2); margin-top: 2px; }
+
+/* 按科目：条形只表达"对/错的构成"，不给科目评分 */
+.w-sub-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.w-sub-n { flex: none; width: 5.2em; font-size: .78rem; color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.w-bar { flex: 1; height: 9px; border-radius: 999px; background: var(--bad-soft); overflow: hidden; }
+.w-bar-ok { display: block; height: 100%; background: var(--ok); border-radius: 999px; }
+.w-sub-v { flex: none; font-size: .7rem; color: var(--dim); white-space: nowrap; font-family: var(--mono); }
+
+/* 卡住的卡 */
+.w-stuck { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.w-stuck:last-child { border-bottom: none; }
+.w-stuck-t { flex: 1; min-width: 0; font-size: .82rem; color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.w-stuck-n { flex: none; font-size: .72rem; color: var(--bad); font-family: var(--mono); white-space: nowrap; }
+
+.w-empty { font-size: .85rem; color: var(--dim); padding: 8px 0; }
+
+/* ---- 历史周报（批次22）：只存"人写的那段" ----
+   设计基调：这一块是全页**唯一写入**的东西，所以给它一个和纯事实区不同的边框，
+   让人一眼看出"下面这两句是我写的、会被保存"。
+   但**不给它更强的强调色** —— 写感想不该比看事实更显眼。 */
+.w-note-sec {
+  padding: 12px; border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--panel-2);
+}
+.w-note-sec h4 { margin: 0 0 6px; }
+.w-note-l { display: block; margin-top: 10px; }
+.w-note-l b { display: block; font-size: .78rem; font-weight: 600; color: var(--txt); margin-bottom: 5px; }
+.w-note-l input {
+  width: 100%; box-sizing: border-box; padding: 8px 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  color: var(--txt); font-size: .85rem; font-family: inherit;
+}
+.w-note-l input:focus { outline: none; border-color: var(--pri); }
+.w-note-act { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.w-rd { margin-top: 10px; }
+.w-rd b { display: block; font-size: .78rem; font-weight: 600; color: var(--txt); margin-bottom: 3px; }
+.w-rd p { margin: 0; font-size: .85rem; color: var(--dim); line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.w-final-tag {
+  font-size: .66rem; font-weight: 500; color: var(--pri);
+  background: var(--pri-soft); padding: 2px 7px; border-radius: 999px; margin-left: 6px;
+}
+
+/* 历史列表：每一条是一个按钮（点开=跳到那一段区间） */
+.w-hist {
+  display: block; width: 100%; text-align: left; box-sizing: border-box;
+  padding: 10px; margin-bottom: 8px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  font-family: inherit; color: inherit;
+}
+.w-hist:hover { border-color: var(--pri); }
+.w-hist-h { display: flex; align-items: center; gap: 8px; }
+.w-hist-h b { font-size: .8rem; color: var(--txt); font-family: var(--mono); }
+.w-hist-st { font-size: .64rem; font-style: normal; color: var(--dim); border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 6px; white-space: nowrap; }
+.w-hist-st.final { color: var(--pri); border-color: var(--pri); }
+.w-hist-n { margin-top: 4px; font-size: .7rem; color: var(--dim2); font-family: var(--mono); }
+.w-hist-t { margin-top: 5px; font-size: .78rem; color: var(--dim); line-height: 1.6; overflow: hidden; text-overflow: ellipsis; }
+
+/* 阶段进度推进条（看板）：回答"整批卡走到哪一步了" */
+.pg-bar { display: flex; height: 22px; border-radius: 999px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); }
+.pg-bar i { display: block; height: 100%; }
+.pg-bar i:first-child { border-top-left-radius: 999px; border-bottom-left-radius: 999px; }
+.pg-bar i:last-child { border-top-right-radius: 999px; border-bottom-right-radius: 999px; }
+.pg-lg { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 9px; }
+.pg-lg span { font-size: .74rem; color: var(--dim); white-space: nowrap; }
+.pg-lg span i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.pg-lg span b { color: var(--txt); font-family: var(--mono); margin-left: 2px; }
 .d-daily { padding-bottom: 16px; }
 .d-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
 .d-head h3 { margin: 0; font-size: .92rem; font-weight: 600; }
@@ -798,6 +947,100 @@ button { cursor: pointer; }
 .ev-i p { margin: 4px 0 0; font-size: .8rem; color: var(--dim); line-height: 1.7; }
 .ev-v { margin-top: 4px; font-size: .74rem; color: var(--dim2); }
 
+/* ================= 家长视角（批次20）=================
+   设计基调：**比看板更安静**。
+   家长这一页的读者是"不坐在电脑前的大人"，他会在手机上、在晚上翻一下。
+   所以：更大的字号、更少的颜色、更多的解释文字。
+   颜色只用在**一句话总结**那一块（三种语气），其余一律走中性色 ——
+   颜色本身在暗示"好/坏"，而这一页刻意不做评判。 */
+.p-head {
+  border: 1px solid var(--line); border-left: 3px solid var(--pri);
+  border-radius: var(--r-sm); background: var(--panel-2);
+  padding: .8em .95em; margin-bottom: 14px;
+}
+.p-head-t { font-size: 1rem; font-weight: 700; color: var(--txt); line-height: 1.6; margin-bottom: 6px; }
+.p-head-p { margin: 0 0 8px; font-size: .82rem; color: var(--dim); line-height: 1.85; }
+.p-head-a {
+  font-size: .82rem; color: var(--txt); line-height: 1.7;
+  border-top: 1px dashed var(--line); padding-top: 8px;
+}
+.p-head-a > span {
+  display: inline-block; font-size: .7rem; font-weight: 700; color: var(--pri);
+  margin-right: 6px; white-space: nowrap;
+}
+/* 三种语气：只在左侧色条 + 标题色上区分，不做整块底色（底色太重会像"警告"） */
+.p-tone-quiet { border-left-color: var(--dim2); }
+.p-tone-quiet .p-head-t { color: var(--dim); }
+.p-tone-gap { border-left-color: #e0a33b; }
+.p-tone-gap .p-head-a > span { color: #b8791f; }
+.p-tone-active { border-left-color: var(--pri); }
+
+/* 有记录的天：一天一个小方块，颜色深浅不表达好坏，只表达"有没有" */
+.p-days { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.p-day {
+  display: flex; flex-direction: column; align-items: center;
+  border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-sm);
+  padding: .3em .55em; min-width: 44px;
+}
+.p-day i { font-style: normal; font-size: .64rem; color: var(--dim2); }
+.p-day b { font-size: .86rem; color: var(--txt); }
+
+/* 「算不出来」说明框：和 KPI 卡上的「—」配套，语气要平，不能像报错 */
+.p-unknown-box {
+  margin-top: 10px; padding: .6em .8em;
+  border: 1px dashed var(--line); border-radius: var(--r-sm); background: var(--panel-2);
+}
+.p-unknown-box b { display: block; font-size: .8rem; color: var(--txt); margin-bottom: 3px; }
+.p-unknown-box p { margin: 0; font-size: .78rem; color: var(--dim); line-height: 1.75; }
+
+/* 可以帮上忙的地方：一条一条，不并排（并排会被读成"待办清单"） */
+.p-help {
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--panel); padding: .6em .8em; margin-bottom: 8px;
+}
+.p-help-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.p-help-a { flex: 1; min-width: 0; font-size: .86rem; font-weight: 600; color: var(--txt); }
+.p-help-n { font-size: .72rem; color: var(--dim2); white-space: nowrap; }
+.p-help-t { margin: 0; font-size: .8rem; color: var(--dim); line-height: 1.75; }
+
+/* 他自己写的那段 */
+.p-note {
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--panel); padding: .6em .8em; margin-bottom: 8px;
+}
+.p-note-d { font-size: .7rem; color: var(--dim2); margin-bottom: 5px; }
+.p-note-l { margin: 0 0 4px; font-size: .82rem; color: var(--txt); line-height: 1.8; }
+.p-note-l:last-child { margin-bottom: 0; }
+.p-note-l > span {
+  display: inline-block; font-size: .68rem; font-weight: 700; color: var(--dim2);
+  margin-right: 6px; white-space: nowrap;
+}
+.p-note-l > span::after { content: "："; }
+
+/* 答不了的三件事 */
+.p-cannot-i { padding: .5em 0; border-top: 1px solid var(--line); }
+.p-cannot-i:first-child { border-top: 0; }
+.p-cannot-i b { display: block; font-size: .84rem; color: var(--txt); margin-bottom: 3px; }
+.p-cannot-i p { margin: 0; font-size: .78rem; color: var(--dim); line-height: 1.8; }
+
+/* 承诺边界：一块安静的说明，不用警示色 —— 它不是"警告"，是"说明" */
+.p-priv {
+  margin-top: 14px; padding: .7em .85em;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2);
+}
+.p-priv b { display: block; font-size: .78rem; color: var(--txt); margin-bottom: 4px; line-height: 1.6; }
+.p-priv p { margin: 0; font-size: .76rem; color: var(--dim2); line-height: 1.8; }
+
+/* 现在有什么（存量，只摆不评）*/
+.p-now { display: flex; flex-wrap: wrap; gap: 8px; }
+.p-now-i {
+  display: flex; align-items: baseline; gap: 4px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--panel); padding: .3em .6em;
+}
+.p-now-i b { font-size: .9rem; color: var(--txt); }
+.p-now-i i { font-style: normal; font-size: .7rem; color: var(--dim2); }
+
 /* 能力中心 */
 .skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
 .skill-c {
@@ -835,6 +1078,17 @@ button { cursor: pointer; }
 .doc-i .dim { font-size: .75rem; margin-top: 2px; }
 .doc-i.bad { border-color: var(--warn); background: var(--warn-soft); }
 .doc-i .doc-err { font-size: .76rem; color: var(--warn); margin-top: 4px; line-height: 1.6; }
+/* 扫描件识别进度：条要细、提示要小 —— 它是"在动"的证据，不是主角 */
+.doc-i .doc-prog {
+  margin-top: 6px; height: 4px; border-radius: 999px;
+  background: var(--pri-soft); overflow: hidden; max-width: 420px;
+}
+.doc-i .doc-prog i {
+  display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--pri), #38BDF8);
+  transition: width .6s ease;
+}
+.doc-i .doc-prog-t { font-size: .74rem; color: var(--dim2); margin-top: 4px; }
 .hit-i { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 11px 14px; font-size: .84rem; }
 .hit-i .h-f { font-size: .74rem; color: var(--pri); margin-bottom: 4px; font-weight: 600; }
 .hit-i mark { background: color-mix(in srgb, var(--warn) 30%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }

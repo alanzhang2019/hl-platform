@@ -105,10 +105,14 @@ const uid = 'u_p3';
   ok(after.reviewCount > before.reviewCount, '自由练习也留痕（reviewCount 增加）');
 
   // ---------- 7. 复习计划管理：今天/明天/待更新 ----------
+  // ★ 这里必须**先取一次 now** 再比较：#setPlan 内部用的是它自己那一刻的 D.now()，
+  //   而断言若再去调 D.now()（尤其是 {due, now} 里又调一次），两次调用之间的漂移
+  //   在磁盘吃紧的机器上能到几秒 ⇒ 公差 ±2000ms 会被打穿，报成"推后约 1 天"失败。
+  const nowT = D.now();
   const tp = cards.setPlan(sid, c1.id, 'today');
-  ok(tp.dueAt <= D.now() + 1000 && tp.plan === 'scheduled', '今天再练 → 立即到期', { due: tp.dueAt, now: D.now() });
+  ok(tp.dueAt <= nowT + 3000 && tp.plan === 'scheduled', '今天再练 → 立即到期', { due: tp.dueAt, now: nowT });
   const tm = cards.setPlan(sid, c1.id, 'tomorrow');
-  ok(tm.dueAt >= D.now() + DAY - 2000 && tm.dueAt <= D.now() + DAY + 2000, '明天再练 → 推后约 1 天', { due: tm.dueAt, now: D.now() });
+  ok(tm.dueAt >= nowT + DAY - 5000 && tm.dueAt <= nowT + DAY + 5000, '明天再练 → 推后约 1 天', { due: tm.dueAt, now: nowT, delta: tm.dueAt - nowT });
   const pd = cards.setPlan(sid, c1.id, 'pending');
   ok(pd.plan === 'pending', '复习时间待更新 → plan=pending');
   const pdCard = cards.getCard(sid, c1.id);

@@ -180,7 +180,7 @@
   const ART_NAME = {
     mindmap: '思维导图', flow: '流程图', timeline: '时间轴',
     geometry: '几何图形', bars: '条形对比', tree: '层级图', concept: '概念关系图',
-    illustration: '配图',
+    grid: '网格数表', illustration: '配图',
   };
   const PALETTE = ['var(--pri)', '#0EA5E9', '#16A34A', '#D97706', '#7C3AED', '#DC2626', '#0891B2', '#DB2777'];
 
@@ -496,6 +496,96 @@
   }
 
   /**
+   * 网格 / 棋盘 / 数表。
+   *
+   * 为什么单开一档：方格取数、数字三角形、乘法表、概率表格这类题的图，
+   * 用 geometry（点 + 线 + 多边形）**根本画不出来** —— 模型只会硬凑出几个孤立的点
+   * 和几个游离的数字，学生看到的就是"不知所云"（线上就是这么撞的：
+   * 一道方格取数的题配了张 A、B 两点加 7/5/3 三个数字的图）。
+   * 网格只有一个正确画法：**把每个格子的数字都摆出来**，一格都不能省。
+   *
+   * 入参故意做得很宽松（模型给哪种写法都认）：
+   *   cells / grid / rows / data —— 二维数组；行也可以写成 "7,3,5" 这种字符串
+   *   rowLabels / colLabels      —— 可选的行列标题
+   *   marks: [{r,c,label}]       —— 可选，标记某个格子（起点 A、终点 B…）
+   *   path:  [[r,c], …]          —— 可选，高亮一条路径
+   */
+  function grid(spec2) {
+    const raw = spec2.cells || spec2.grid || spec2.rows || spec2.data || [];
+    let rows = Array.isArray(raw) ? raw.slice(0, 12) : [];
+    rows = rows.map(r => {
+      const arr = Array.isArray(r) ? r : String(r == null ? '' : r).split(/[,\s|、]+/);
+      return arr.slice(0, 10).map(c => (c == null ? '' : String(c).slice(0, 6)));
+    }).filter(r => r.length);
+    if (!rows.length) return null;
+    const cols = Math.max.apply(null, rows.map(r => r.length).concat([1]));
+    if (!cols) return null;
+
+    const rl = Array.isArray(spec2.rowLabels) ? spec2.rowLabels : [];
+    const cl = Array.isArray(spec2.colLabels) ? spec2.colLabels : [];
+    const hasR = rl.length > 0, hasC = cl.length > 0;
+    const PAD = 14, LAB = 34, CAP = 30;
+    const cw = Math.max(24, Math.min(54, Math.floor((440 - (hasR ? LAB : 0)) / cols)));
+    const chh = Math.max(22, Math.min(46, Math.round(cw * 0.8)));
+    const x0 = PAD + (hasR ? LAB : 0);
+    const y0 = PAD + (hasC ? CAP : 0);
+    const W = x0 + cols * cw + PAD;
+    const H = y0 + rows.length * chh + PAD;
+
+    const keyOf = (r, c) => r + ',' + c;
+    const path = Array.isArray(spec2.path) ? spec2.path : [];
+    const marks = Array.isArray(spec2.marks) ? spec2.marks : [];
+    const inPath = {};
+    path.forEach(p => {
+      if (!Array.isArray(p)) return;
+      const r = Number(p[0]), c = Number(p[1]);
+      if (Number.isFinite(r) && Number.isFinite(c)) inPath[keyOf(r, c)] = 1;
+    });
+    const markAt = {};
+    marks.forEach(m => {
+      if (!m) return;
+      const r = Number(m.r != null ? m.r : m.row), c = Number(m.c != null ? m.c : m.col);
+      if (!Number.isFinite(r) || !Number.isFinite(c)) return;      // 坐标不合法就整条丢掉，不画 NaN
+      markAt[keyOf(r, c)] = { label: String(m.label || '').slice(0, 2), color: safeColor(m.color, 'var(--pri)') };
+    });
+
+    let s = '';
+    if (hasC) cl.slice(0, cols).forEach((t, c) => {
+      s += svgText(x0 + c * cw + cw / 2, y0 - CAP / 2, String(t), { per: 4, fs: 12, fill: 'var(--dim)' });
+    });
+    if (hasR) rl.slice(0, rows.length).forEach((t, r) => {
+      s += svgText(x0 - 8, y0 + r * chh + chh / 2, String(t), { per: 4, fs: 12, anchor: 'end', fill: 'var(--dim)' });
+    });
+
+    rows.forEach((row, r) => {
+      for (let c = 0; c < cols; c++) {                             // 补齐到 cols，边框才是齐的矩形
+        const v = row[c] == null ? '' : row[c];
+        const x = x0 + c * cw, y = y0 + r * chh;
+        const mk = markAt[keyOf(r, c)];
+        const hl = inPath[keyOf(r, c)];
+        const base = (r % 2) ? 'var(--panel-3)' : 'var(--panel)';
+        // ★ 高亮不能只靠底色：`--pri-soft (#E8EFFF)` 和奇数行的 `--panel-3 (#E9EDF6)`
+        //   只差一个蓝色通道，叠在一起根本分不出来（出图实测过）。
+        //   加了主题色描边和主题色数字，路径/起终点才是一眼可见的。
+        const acc = !!mk || !!hl;
+        const fill = acc ? 'var(--pri-soft)' : base;
+        const stroke = acc ? 'var(--pri)' : 'var(--line)';
+        s += '<rect x="' + x + '" y="' + y + '" width="' + cw + '" height="' + chh + '" rx="3" fill="' + fill +
+          '" stroke="' + stroke + '" stroke-width="' + (mk ? 2 : (hl ? 1.5 : 1)) + '"' +
+          ((r % 2 && !acc) ? ' opacity=".6"' : '') + '/>';
+        if (v) {
+          s += svgText(x + cw / 2, y + chh / 2, String(v),
+            { per: 4, fs: Math.max(11, Math.min(15, Math.round(chh * 0.42))), weight: acc ? 700 : 650, fill: acc ? 'var(--pri)' : 'var(--txt)' });
+        }
+        if (mk && mk.label) {
+          s += svgText(x + cw - 5, y + 9, mk.label, { per: 2, fs: 10, anchor: 'end', weight: 700, fill: mk.color });
+        }
+      }
+    });
+    return art('grid', spec2.title, s, W, H);
+  }
+
+  /**
    * 插画：AI 配图的落点。
    *
    * 为什么不用位图：这个平台的"画"一律是模型出结构化 JSON、前端原生 SVG 渲染
@@ -653,10 +743,13 @@
       if (kind === 'timeline') return timeline(obj);
       if (kind === 'geometry' || kind === 'shape' || kind === 'figure') return geometry(obj);
       if (kind === 'bars' || kind === 'bar' || kind === 'chart') return bars(obj);
+      if (kind === 'grid' || kind === 'table' || kind === 'matrix' || kind === 'board') return grid(obj);
       if (obj.elements && obj.elements.length) return illustration(obj);
       if (Array.isArray(obj.days) && obj.days.length) return planCard(obj);
       if (obj.nodes && obj.nodes.length) return nodeGraph(obj);
       if (obj.items && obj.items.length) return bars(obj);
+      // 兜底：没写 kind 但给了格子数据，也要当网格画出来（否则退化成"解析不成功"）
+      if (Array.isArray(obj.cells) || Array.isArray(obj.grid) || Array.isArray(obj.rows)) return grid(obj);
       return null;
     } catch (e) { return null; }
   }

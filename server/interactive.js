@@ -82,24 +82,39 @@ function validateDSL(d) {
   return { ok: true };
 }
 
-// ---------- 离线兜底：按关键词给一个合法模型 ----------
+// ---------- 离线兜底：按关键词给一个**主题对得上**的模型 ----------
 function pt(x, y) { return { x, y }; }
+/**
+ * 按关键词给一个兜底模型；**一条都没命中就返回 null**。
+ *
+ * ★ 2026-10-02 修掉一个很伤的问题：这里原来在"什么都没匹配上"时返回一个写死的
+ *   抛物线预设（"动手试试：拖一拖这个点"），于是一道「方格取数」的题被挂上了
+ *   「一次函数与直线斜率」的互动课堂 —— 学生看到的东西和他的题目**毫无关系**，
+ *   比不给还糟：他会以为是自己的题被理解错了。
+ *
+ * 现在的规矩，两条：
+ *   ① 关键词命中 → 给一个**同主题**的模型（朴素没关系，别误导）；
+ *   ② 一条都没命中 → **null**，由调用方如实说明"这段内容没有适合做成互动模型的地方"。
+ * 一句话：**宁可没有，也不给一个错的。**
+ */
 function presetFromText(text) {
-  const t = String(text || '').toLowerCase();
-  if (/二次|平方|抛物|parabola|quadratic|顶点|开口/.test(t)) {
+  const t = String(text || '');
+  if (/二次函数|抛物线|开口方向|顶点式|quadratic|parabola/i.test(t)) {
     return { type: 'function-plot', title: '二次函数图像', f: 'a*x^2 + b*x + c', domain: [-5, 5], params: [{ name: 'a', min: -3, max: 3, value: 1 }, { name: 'b', min: -5, max: 5, value: -2 }, { name: 'c', min: -5, max: 5, value: 0 }], point: { x: 1.5 }, tangent: true };
   }
-  if (/三角|内角|angle|triangle|边长|内角和/.test(t)) {
-    return { type: 'geometry', title: '三角形与它的角', shapes: [{ type: 'triangle', points: [pt(0, 0), pt(4, 0), pt(1.2, 3)] }], draggable: true, measures: ['side', 'angle'] };
-  }
-  if (/正弦|余弦|sin|cos|周期|wave|振动|波动/.test(t)) {
+  if (/正弦|余弦|三角函数|周期函数|sin\s*\(|cos\s*\(/i.test(t)) {
     return { type: 'function-plot', title: '正弦曲线', f: 'sin(x)', domain: [-6.3, 6.3], point: { x: 0.6 }, tangent: true };
   }
-  if (/一次|线性|斜率|linear|比例|直线|k\*x/.test(t)) {
+  if (/一次函数|正比例|斜率|直线方程|linear/i.test(t)) {
     return { type: 'function-plot', title: '一次函数与直线斜率', f: 'k*x + b', domain: [-5, 5], params: [{ name: 'k', min: -4, max: 4, value: 2 }, { name: 'b', min: -4, max: 4, value: 1 }], point: { x: 1 }, tangent: true };
   }
-  // 默认：一个最简单的可拖点抛物线，保证"能玩"
-  return { type: 'function-plot', title: '动手试试：拖一拖这个点', f: 'x^2 - 2*x - 1', domain: [-4, 4], point: { x: 1.2 }, tangent: true };
+  if (/三角形|内角和|勾股|三角形的边|triangle/i.test(t)) {
+    return { type: 'geometry', title: '三角形与它的角', shapes: [{ type: 'triangle', points: [pt(0, 0), pt(4, 0), pt(1.2, 3)] }], draggable: true, measures: ['side', 'angle'] };
+  }
+  if (/半径|圆周|圆的面积|圆的周长|圆周率/i.test(t)) {
+    return { type: 'geometry', title: '圆与它的半径', shapes: [{ type: 'circle', center: pt(0, 0), r: 2 }], draggable: true, measures: ['side'] };
+  }
+  return null;
 }
 
 // ---------- 生成（LLM → 校验 → 自愈一次 → preset 兜底）----------
@@ -137,13 +152,16 @@ function buildPrompt(text) {
 ${String(text || '').slice(0, 4000)}`;
 }
 
+/** 模型判定"这里没有值得做成模型的概念"时的统一说法，前端原样展示给学生 */
+const NONE_MSG = '这段内容里没有适合做成互动模型的地方（它更像是推理或计算题，画不出可拖的图形）';
+
 async function generate(spaceId, userId, { text, messageId, conversationId } = {}) {
   const job = chat.createJob(spaceId, userId, 'interactive', { conversationId: conversationId || null, messageId: messageId || null });
   let dsl = null, source = 'preset', usedHeal = false, genErr = null;
   try {
     let raw = await llm.completeJSON({ messages: [{ role: 'user', content: buildPrompt(text) }], model: 'default' });
     if (Array.isArray(raw)) raw = raw[0];
-    if (raw && raw.type === 'none') raw = null;
+    if (raw && raw.type === 'none') { genErr = NONE_MSG; raw = null; }
     if (raw) {
       let v = validateDSL(raw);
       if (!v.ok) {
@@ -155,7 +173,18 @@ async function generate(spaceId, userId, { text, messageId, conversationId } = {
       } else { dsl = raw; source = 'llm'; }
     }
   } catch (e) { genErr = String(e.message || e); }
-  if (!dsl) { dsl = presetFromText(text || ''); source = 'preset'; }
+  if (!dsl) {
+    // 兜底只给**主题对得上**的模型；对不上就宁可没有（见 presetFromText 的说明）
+    const fb = presetFromText(text || '');
+    if (fb) { dsl = fb; source = 'preset'; }
+  }
+  if (!dsl) {
+    // ★ 没生成出东西时**绝不挂一个示例模型上去**（旧行为：一律给一条抛物线，
+    //   结果互动课堂和学生问的题毫无关系）。如实失败，让前端说人话。
+    const reason = genErr || NONE_MSG;
+    chat.failJob(job.id, reason);
+    return { jobId: job.id, id: null, dsl: null, source: 'none', validated: false, usedHeal, error: reason };
+  }
   const fv = validateDSL(dsl);   // preset 必须自合法
   chat.finishJob(job.id, dsl);
   let attachedId = null;
@@ -194,5 +223,5 @@ function share(spaceId, id) {
 function shareInfo(spaceId, id) { return core.shareInfo(spaceId, 'interactive', id); }
 
 module.exports = {
-  TYPES, MAX_POINTS, validateDSL, presetFromText, generate, attachToMessage, getByMessage, getJob, share, shareInfo,
+  TYPES, MAX_POINTS, NONE_MSG, validateDSL, presetFromText, generate, attachToMessage, getByMessage, getJob, share, shareInfo,
 };

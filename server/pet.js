@@ -39,10 +39,17 @@ const STAGES = [
  *   代价：阶段 5 只剩共享池一项。这反而更合理 ——
  *   共享池是唯一"需要先有东西可分享"的功能，放最后正合适。
  *
+ *   ★ 家长视角（批次20）同样放在**阶段 1**，理由与看板同源：
+ *     ① 它读的正是看板/日报的同一批事实（activity / card_reviews / 已定稿日报），
+ *        把看板放在阶段 1 却把家长视角锁到后面，等于"事实已经有了，只是不给你看"。
+ *     ② 家长是**第一天就会想看一眼**的人；让他攒积分才能看，他只会换个方式问孩子。
+ *     ③ 它没有任何"新能力" —— 不写库、不产生内容，只把已有事实换个视角摆一次。
+ *        解锁表防的是"信息过载"，而这一页恰恰是**减载**（一页只有四块 + 三个"答不了"）。
+ *
  * key 与前端 KB_SUBS 的 key 对齐（英语在前端叫 en）。
  */
 const UNLOCKS = [
-  { stage: 1, features: ['chat', 'projects', 'docs', 'cards', 'dash'] },
+  { stage: 1, features: ['chat', 'projects', 'docs', 'cards', 'dash', 'parent'] },
   { stage: 2, features: ['skills'] },
   { stage: 3, features: ['memory', 'exam'] },
   { stage: 4, features: ['en'] },
@@ -52,7 +59,7 @@ const UNLOCKS = [
 const FEATURE_LABEL = {
   chat: '对话', projects: '项目', docs: '资料', cards: '知识卡',
   skills: '能力', memory: '记忆', exam: '测评', en: '英语',
-  pool: '共享池', dash: '看板',
+  pool: '共享池', dash: '看板', parent: '家长视角',
 };
 
 function ensure(spaceId, userId) {

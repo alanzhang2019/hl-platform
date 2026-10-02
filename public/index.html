@@ -522,6 +522,21 @@
           <div class="card-list" id="dashBody"></div>
         </div>
 
+        <!-- 家长视角（知识库分区）-->
+        <!-- ★ 为什么不做成一个独立的"家长端站点"：家长和孩子的设备往往是同一台。
+             做成独立入口要先解决"家长凭什么证明自己是家长"，
+             而这个产品**没有全站密码门**（只有 ADMIN_PASSWORD 保护 /api/admin/*）。
+             做成一个分区，孩子自己也能看 —— 这恰恰是对的：
+             一个敢让孩子看到的家长页，才是没在偷偷监视的家长页。 -->
+        <div class="kb-sub" id="view-parent" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">家长视角</div><div class="s">这里回答的不是"他做了多少"，是"我能做什么"</div></div>
+            <div class="sp"></div>
+            <button class="btn sm" id="parentRefresh" type="button">刷新</button>
+          </div>
+          <div class="card-list" id="parentBody"></div>
+        </div>
+
         <!-- 能力（知识库分区）-->
         <div class="kb-sub" id="view-skills" hidden>
           <div class="topbar">

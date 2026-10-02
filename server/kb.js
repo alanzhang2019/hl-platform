@@ -155,13 +155,40 @@ function getDocument(spaceId, id, withText) {
   return d ? shapeDoc(d, withText !== false) : null;
 }
 
+// ---------- 文件名纠正 ----------
+// 前端粘贴/截图过来的文件拿不到真名（浏览器只给 "blob"），只能造一个占位名。
+// 解析器是按**字节**认类型的，比文件名可信 —— 用它把占位扩展名纠回来，
+// 让「粘贴的文件.bin」显示成「粘贴的文件.docx」。
+//
+// 触发条件刻意保守：**只有文件名没有扩展名、或扩展名不在已知集合里**才纠正。
+// 用户自己写的 .pdf / .md 一律不动 —— 那是他的命名，改了对不上他的认知，
+// 反而像"我传的 pdf 怎么变成 docx 了"。
+const KNOWN_EXT = [
+  'pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'rtf',
+  'csv', 'tsv', 'md', 'markdown', 'txt', 'text', 'json', 'html', 'htm', 'xml', 'log', 'yaml', 'yml',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg',
+];
+// 解析结果 kind → 规范扩展名。只收"能确定"的：
+// ole 故意不在表里（它可能是旧 doc / xls / ppt 三种，猜错不如保持原名）；unknown / '?' 同理。
+const KIND_EXT = { pdf: 'pdf', docx: 'docx', xlsx: 'xlsx', pptx: 'pptx', rtf: 'rtf', text: 'txt' };
+
+/** 用解析出的真实类型纠正占位扩展名（只动扩展名，主名原样保留）。 */
+function alignName(name, r) {
+  const ext = extract.extOf(name);
+  if (ext && KNOWN_EXT.indexOf(ext) >= 0) return name;
+  const want = KIND_EXT[String((r && r.kind) || '').toLowerCase()];
+  if (!want || ext === want) return name;
+  const base = ext ? name.slice(0, name.length - ext.length - 1) : name;
+  return (base || '未命名') + '.' + want;
+}
+
 /**
  * 上传：前端把文件读成 base64 传过来（不引入 multipart 解析）。
  * 抽取同步完成 —— 家庭级文档（几 MB）在 Node 里是毫秒到百毫秒量级，
  * 没必要做后台队列，做队列反而引入"状态卡在 parsing"这类难查的问题。
  */
 function addDocument(spaceId, userId, { filename, dataBase64, text, categoryId, projectId, conversationId, scope }) {
-  const name = String(filename || '未命名').slice(0, 200);
+  let name = String(filename || '未命名').slice(0, 200);
   // ★ 容量卡在入库之前：让容量真的生效（否则"容量 5/5"只是个装饰数字）。
   //   临时资料(scope=temp)不计入本子容量 —— 它挂在对话上，本来就不占资料库位置。
   const cid = categoryId || null;
@@ -184,12 +211,28 @@ function addDocument(spaceId, userId, { filename, dataBase64, text, categoryId, 
 
   const id = D.uid('kb_');
   const size = buf.length;
-  let parsed = '', pages = 0, status = 'ready', error = null;
+  let parsed = '', pages = 0, status = 'ready', error = null, progress = 100;
+  // 扫描件要排队做 OCR，调用方（chat.saveDocument）据此建异步任务。
+  let scanned = false;
   try {
     const r = extract.extract(buf, name);
     parsed = r.text || '';
     pages = r.pages || 0;
-    if (!r.ok) { status = 'failed'; error = r.note || '没能从这份文件里抽出文字'; }
+    // 认出了真实类型就把占位扩展名纠回来（.bin → .docx）。放在落盘之前，
+    // 这样磁盘上的原文件、库里的名字、模型看到的清单三者一致。
+    name = alignName(name, r);
+    if (r.ok) {
+      // 文字层读出来了，正常入库
+    } else if (r.scanned && require('./ocr').ocrConfig().enabled) {
+      // ★ 扫描件不是"解析失败"—— 文件是好的，只是这条路走不通，得换 OCR。
+      //   报 failed 会让用户以为文件坏了、去重新下载；报 parsing 排队识别才是实话。
+      status = 'parsing'; progress = 0; scanned = true; error = null;
+    } else if (r.scanned) {
+      // 是扫描件但用不了 OCR：明说原因，不能让他对着"解析中"等一个不会来的结果。
+      status = 'failed'; error = require('./ocr').OCR_DISABLED_NOTE;
+    } else {
+      status = 'failed'; error = r.note || '没能从这份文件里抽出文字';
+    }
   } catch (e) {
     status = 'failed'; error = '解析出错：' + (e.message || e);
   }
@@ -207,11 +250,47 @@ function addDocument(spaceId, userId, { filename, dataBase64, text, categoryId, 
   const sc = scope === 'temp' ? 'temp' : 'kb';
   D.run(`INSERT INTO kb_documents(id,space_id,category_id,filename,size,pages,status,progress,storage_path,parsed_text,error,conversation_id,scope,created_at)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    id, spaceId, cid, name, size, pages, status, 100, storage, parsed, error,
+    id, spaceId, cid, name, size, pages, status, progress, storage, parsed, error,
     sc === 'temp' ? (conversationId || null) : null, sc, D.now());
   if (projectId) D.run('INSERT OR IGNORE INTO project_docs(project_id,doc_id) VALUES(?,?)', projectId, id);
   core.logActivity(spaceId, userId, 'kb_upload', id, { filename: name, size: size, status: status, scope: sc });
-  return getDocument(spaceId, id);
+  const shaped = getDocument(spaceId, id);
+  // scanned 不进库，只挂在这一份返回值上 —— 它是"需要排队识别"的一次性信号。
+  if (shaped && scanned) shaped.scanned = true;
+  return shaped;
+}
+
+// ---------- 扫描件 OCR 的写回口（由 jobs 的 ocr runner 调用）----------
+
+/** 取原始行（runner 需要 storage_path 才能重新读出原文件） */
+function getDocumentRow(spaceId, id) {
+  return D.get('SELECT * FROM kb_documents WHERE id = ? AND space_id = ?', id, spaceId);
+}
+
+/** 单份进度：让"识别中 37/130"是真的在动，而不是一个装饰性的转圈 */
+function setDocumentProgress(spaceId, id, progress) {
+  const p = Math.max(0, Math.min(99, Math.round(Number(progress) || 0)));
+  D.run("UPDATE kb_documents SET progress = ? WHERE id = ? AND space_id = ? AND status = 'parsing'", p, id, spaceId);
+}
+
+/** 识别完成：写入正文、置 ready。pages 以真实页数为准（扫描件页数不受图片对象数影响）。 */
+function saveOcrText(spaceId, id, text, opts) {
+  const o = opts || {};
+  const t = String(text || '');
+  const pages = Number(o.pages) || 0;
+  const note = o.note ? String(o.note).slice(0, 300) : null;
+  D.run('UPDATE kb_documents SET parsed_text = ?, pages = ?, status = ?, progress = ?, error = ? WHERE id = ? AND space_id = ?',
+    t, pages, 'ready', 100, note, id, spaceId);
+  _cache.delete(id);
+  return getDocument(spaceId, id, false);
+}
+
+/** 识别彻底失败：如实写错误，不留"解析中"的假象 */
+function failDocumentParse(spaceId, id, message) {
+  D.run("UPDATE kb_documents SET status = 'failed', progress = 0, error = ? WHERE id = ? AND space_id = ?",
+    String(message || '识别失败').slice(0, 300), id, spaceId);
+  _cache.delete(id);
+  return getDocument(spaceId, id, false);
 }
 
 function deleteDocument(spaceId, id) {
@@ -258,16 +337,28 @@ function reparseDocument(spaceId, id) {
   let buf = null;
   if (d.storage_path) { try { buf = require('fs').readFileSync(d.storage_path); } catch (e) { buf = null; } }
   if (!buf || !buf.length) { const e = new Error('原件已经不在了，请重新上传'); e.code = 'NO_SOURCE'; throw e; }
-  let parsed = '', pages = 0, status = 'ready', error = null;
+  let parsed = '', pages = 0, status = 'ready', error = null, progress = 100;
+  let scanned = false;
   try {
     const r = extract.extract(buf, d.filename);
     parsed = r.text || ''; pages = r.pages || 0;
-    if (!r.ok) { status = 'failed'; error = r.note || '没能从这份文件里抽出文字'; }
+    // 与 addDocument 同一套判定：扫描件交给 OCR，别报成"文件坏了"。
+    if (r.ok) {
+      // 读出来了
+    } else if (r.scanned && require('./ocr').ocrConfig().enabled) {
+      status = 'parsing'; progress = 0; scanned = true;
+    } else if (r.scanned) {
+      status = 'failed'; error = require('./ocr').OCR_DISABLED_NOTE;
+    } else {
+      status = 'failed'; error = r.note || '没能从这份文件里抽出文字';
+    }
   } catch (e) { status = 'failed'; error = '解析出错：' + (e.message || e); }
-  D.run('UPDATE kb_documents SET parsed_text = ?, pages = ?, status = ?, error = ?, progress = 100 WHERE id = ? AND space_id = ?',
-    parsed, pages, status, error, id, spaceId);
+  D.run('UPDATE kb_documents SET parsed_text = ?, pages = ?, status = ?, error = ?, progress = ? WHERE id = ? AND space_id = ?',
+    parsed, pages, status, error, progress, id, spaceId);
   _cache.delete(id);
-  return getDocument(spaceId, id, false);
+  const shaped = getDocument(spaceId, id, false);
+  if (shaped && scanned) shaped.scanned = true;
+  return shaped;
 }
 
 // ---------- 检索 ----------
@@ -376,5 +467,8 @@ module.exports = {
   listCategories, getCategory, createCategory, renameCategory, expandCategory, deleteCategory,
   uncategorizedCount,
   listDocuments, getDocument, addDocument, deleteDocument, attachToProject, moveDocument, reparseDocument,
+  // 扫描件 OCR 的写回口
+  getDocumentRow, setDocumentProgress, saveOcrText, failDocumentParse,
+  alignName, KNOWN_EXT, KIND_EXT,
   chunkText, terms, retrieve, contextFor,
 };

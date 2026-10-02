@@ -202,7 +202,8 @@ async function report(page, tag) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const base = 'http://127.0.0.1:' + port;
-  const until = Date.now() + 20000;
+  // ★ 60 秒（与其它自带服务的套件一致）：本机 C 盘接近写满，SQLite 初始化可能十几秒。
+  const until = Date.now() + 60000;
   let up = false;
   while (Date.now() < until) {
     try { const r = await fetch(base + '/api/health'); if (r.ok) { up = true; break; } } catch (e) {}

@@ -46,7 +46,10 @@ async function probe(extraEnv) {
   let err = '';
   child.stderr.on('data', d => { err += d; });
   try {
-    const until = Date.now() + 15000;
+    // ★ 60 秒，别退回 15 秒：本机 C 盘接近写满，光 SQLite 初始化就可能十几秒。
+    //   15 秒会把「机器慢」误报成「服务坏了」，而且这个套件专守 .env 加载顺序，
+    //   假红会让人以为加载器坏了 —— 那是最不该误报的一处。
+    const until = Date.now() + 60000;
     while (Date.now() < until) {
       try {
         const r = await fetch('http://127.0.0.1:' + port + '/api/health');

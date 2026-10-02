@@ -211,6 +211,45 @@ group('6. svg-json → 原生 SVG');
   const tree = svgOf({ nodes: [{ id: 'r', label: '根' }, { id: 'c', label: '叶' }], edges: [{ from: 'r', to: 'c' }] });
   ok('没有 kind 但有 nodes 时按节点图渲染', has(tree, '<svg'));
 
+  // ---------- 网格：方格取数这类题的专用档 ----------
+  // 背景：模型曾用 geometry 画网格题 → 几个孤立点 + 几个游离数字，学生看不懂。
+  // grid 的唯一正确画法是把每个格子的数**都填出来**，所以断言必须验"数字真的在格子里"。
+  const gd = svgOf({
+    kind: 'grid', title: '方格取数',
+    cells: [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9']],
+    marks: [{ r: 0, c: 0, label: 'A' }, { r: 2, c: 2, label: 'B' }],
+  });
+  ok('grid 产出 svg', has(gd, '<svg'));
+  ok('grid 类型名', has(gd, '网格数表'));
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9'].forEach(n =>
+    ok('  格子里的数字都真的画出来了：' + n, has(gd, '>' + n + '<')));
+  ok('marks 的标签渲染出来了', has(gd, '>A<') && has(gd, '>B<'));
+  ok('grid 不含 NaN', !has(gd, 'NaN'));
+
+  const gdStr = svgOf({ kind: 'grid', title: '字符串行', rows: ['7,3,5', '2,9,4'] });
+  ok('行写成 "7,3,5" 也能解析', has(gdStr, '<svg') && has(gdStr, '>7<') && has(gdStr, '>9<'));
+
+  const gdNoKind = svgOf({ cells: [['甲', '乙'], ['丙', '丁']] });
+  ok('没写 kind 但有 cells 也按网格画', has(gdNoKind, '<svg') && has(gdNoKind, '>甲<'));
+
+  const gdPath = svgOf({
+    kind: 'grid', title: '走方格', cells: [[1, 2], [3, 4]],
+    path: [[0, 0], [0, 1], [1, 1]],
+  });
+  ok('path 高亮不崩且无 NaN', has(gdPath, '<svg') && !has(gdPath, 'NaN'));
+
+  // 脏输入：这些曾经会让 SVG 整块消失（NaN 静默）
+  [ { kind: 'grid', cells: [] },
+    { kind: 'grid', cells: [[]] },
+    { kind: 'grid', cells: '不是数组' },
+    { kind: 'grid', cells: [[null, undefined], [1]] },
+    { kind: 'grid', cells: [['a']], marks: [{ r: 'x', c: 'y' }, null], path: [null, [NaN, NaN]] },
+    { kind: 'grid', cells: [['一个特别长的格子内容会溢出']], colLabels: ['超长列标题'], rowLabels: ['超长行标题'] },
+  ].forEach((dirty, i) => {
+    const out = svgOf(dirty);
+    ok('脏网格输入 #' + (i + 1) + ' 不产出 NaN', !has(out, 'NaN'), out.slice(0, 200));
+  });
+
   const broken = HL.render('```svg-json\n{这不是 JSON}\n```');
   ok('坏 JSON 不抛异常', typeof broken === 'string');
   ok('坏 JSON 降级成代码块并给出说明', has(broken, '没能解析成图'));

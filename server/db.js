@@ -443,6 +443,26 @@ CREATE TABLE IF NOT EXISTS daily_reports (
   finalized_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_space_date ON daily_reports(space_id, date);
+
+-- 历史周报（批次22）
+-- 和日报同源同规矩：**只存"人写的那部分"**（这周我注意到什么 / 下周想试什么），
+-- 汇总数字（覆盖 / 合计 / 卡住的卡）**永不落库** —— 它们每次都从 daily.facts() 现算。
+-- ★ 为什么不存一份快照：一旦存了，溯源就变成溯源自证 —— 你点"这个数从哪来"，
+--   拿回来的是周报自己当初抄下来的副本，而不是产生它的那张卡那次复习。
+-- 主键是 (space_id, week_from, week_to)：同一段日期只该有一条，重复定稿不改写历史。
+CREATE TABLE IF NOT EXISTS weekly_reports (
+  id           TEXT PRIMARY KEY,
+  space_id     TEXT NOT NULL,
+  week_from    TEXT NOT NULL,               -- YYYY-MM-DD（含）
+  week_to      TEXT NOT NULL,               -- YYYY-MM-DD（含）
+  status       TEXT NOT NULL DEFAULT 'draft', -- draft | final
+  answers_json TEXT,                        -- 人写的那段（不超过 2000 字/条）
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  finalized_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_weekly_space_range ON weekly_reports(space_id, week_from, week_to);
+CREATE INDEX IF NOT EXISTS idx_weekly_space_to ON weekly_reports(space_id, week_to DESC);
 `;
 
 // ---------- 轻量迁移 ----------
@@ -463,6 +483,10 @@ const MIGRATIONS = [
   // —— 临时资料挂在对话上，聊完随对话删除，不污染正式知识库
   ['kb_documents', 'conversation_id', 'TEXT'],
   ['kb_documents', 'scope', "TEXT NOT NULL DEFAULT 'kb'"],
+  // 扫描件 OCR：任务要能反查"这份资料的识别任务还在不在"。
+  // 没有这一列，任务被清掉后文档会永远停在「识别中」—— 用户既看不到进度，
+  // 也没法重新识别，只能干等一个不会来的结果。
+  ['jobs', 'doc_id', 'TEXT'],
   // 消息状态机 + 元信息 + 附件 + 软删除（批次2：Chat 富功能）
   ['messages', 'status', "TEXT NOT NULL DEFAULT 'done'"],
   ['messages', 'meta_json', 'TEXT'],
@@ -480,6 +504,10 @@ const MIGRATIONS = [
   // 知识库改版：分类容量 + 排序（对齐对标产品的"本子 + 容量 + 扩容"）
   ['kb_categories', 'capacity', 'INTEGER NOT NULL DEFAULT 5'],
   ['kb_categories', 'sort_order', 'INTEGER NOT NULL DEFAULT 0'],
+  // 管理员要能禁用用户（不是删号 —— 删了学习和错题记录就都没了，那是家长的资产）。
+  // 0 = 正常，非 0 = 被禁，登录会被拦、已有会话会被踢下线。
+  ['users', 'disabled', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'disabled_reason', "TEXT NOT NULL DEFAULT ''"],
 ];
 function migrate() {
   MIGRATIONS.forEach(([table, col, decl]) => {

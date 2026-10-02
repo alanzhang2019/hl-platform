@@ -24,8 +24,11 @@ const D = require('./db');
 const core = require('./core');
 const llm = require('./llm');
 const webdoc = require('./webdoc');
+const search = require('./search');
 const kb = require('./kb');
 const skills = require('./skills');
+const extract = require('./extract');
+const ocr = require('./ocr');
 
 // ============================================================
 // 一、消息朗读（TTS）
@@ -207,62 +210,20 @@ async function translateMessage(spaceId, messageId, direction, opts) {
 // ============================================================
 // 三、联网搜索（可插拔）
 // ============================================================
-function searchConfig() {
-  const url = (process.env.WEB_SEARCH_URL || '').trim();
-  return { url: url, key: (process.env.WEB_SEARCH_API_KEY || '').trim(), enabled: !!url };
-}
+// 实现搬到 server/search.js（连推出了内置通道，见那里的注释）。
+// 这里只保留转发，避免同一个行为在两处各写一遍。
+function searchConfig() { return search.searchConfig(); }
 
 /**
  * 联网搜索。
- * 没配搜索通道时**不静默失败**：返回 ok:false + 一句人话，
+ * 没能联网时**不静默失败**：返回 ok:false + 一句人话，
  * 让前端能把「联网搜索暂时不可用，本条回答未联网」原样告诉学生。
  * 偷偷降级成不联网、还让学生以为查过网了，是最坏的做法。
  */
-async function webSearch(query, opts) {
-  const q = String(query || '').trim();
-  if (!q) return { ok: false, reason: 'EMPTY', message: '没有要搜索的内容', results: [] };
-  const cfg = searchConfig();
-  if (!cfg.enabled) {
-    return {
-      ok: false, reason: 'UNAVAILABLE', query: q, results: [],
-      message: '联网搜索暂时不可用，本条回答未联网',
-    };
-  }
-  const o = opts || {};
-  const limit = Math.max(1, Math.min(10, Number(o.limit) || 5));
-  try {
-    const res = await fetch(cfg.url, {
-      method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' },
-        cfg.key ? { Authorization: 'Bearer ' + cfg.key } : {}),
-      body: JSON.stringify({ query: q, limit: limit }),
-    });
-    if (!res.ok) throw new Error('搜索服务返回 ' + res.status);
-    const j = await res.json();
-    const raw = j.results || j.items || j.data || [];
-    const results = (Array.isArray(raw) ? raw : []).slice(0, limit).map(r => ({
-      title: String(r.title || r.name || '').slice(0, 200),
-      url: String(r.url || r.link || ''),
-      snippet: String(r.snippet || r.content || r.description || '').slice(0, 500),
-    }));
-    if (!results.length) {
-      return { ok: true, query: q, results: [], message: '没有搜到相关网页' };
-    }
-    return { ok: true, query: q, results: results };
-  } catch (e) {
-    return {
-      ok: false, reason: 'ERROR', query: q, results: [],
-      message: '联网搜索暂时不可用，本条回答未联网',
-      error: String(e.message || e),
-    };
-  }
-}
+async function webSearch(query, opts) { return search.search(query, opts); }
 
-/** 把搜索结果拼成给模型的一段上下文 */
-function searchContext(hits) {
-  if (!hits || !hits.length) return '';
-  return hits.map((h, i) => `[网页${i + 1}] ${h.title}\n${h.url}\n${h.snippet}`).join('\n\n');
-}
+/** 把搜索结果拼成给模型的一段上下文（实现在 search.js，保持单一出处） */
+function searchContext(hits) { return search.searchContext(hits); }
 
 // ============================================================
 // 四、异步任务（AI 配图 / 后续的互动课堂）
@@ -275,6 +236,11 @@ const JOB_TICK_MS = 1200;
 const JOB_MAX_MS = {
   image: 180000,
   interactive: 15 * 60 * 1000,
+  // 扫描件 OCR：★ 2026-10-02 真书实测改口径 —— 一度以为"并发 3、约 5 分钟"，
+  // 真跑 130 页才发现必须限速（不限速会烂掉大部分页），实际 **20 分钟左右**（≈10 秒/页）。
+  // 45 分钟是留余量（大书 / 接口变慢 / 被限流降速），不是预期耗时 —— 真跑超了说明上游有问题。
+  // 注意：前端自动轮询的上限必须比这个值长，否则进度条会停在半路（见 app.js 的 scheduleKbPoll）。
+  ocr: 45 * 60 * 1000,
 };
 
 const RUNNERS = {};
@@ -352,6 +318,28 @@ function sweepStale() {
     const limit = JOB_MAX_MS[kind];
     D.all("SELECT id FROM jobs WHERE status = 'running' AND kind = ? AND started_at < ?", kind, started - limit)
       .forEach(j => failJob(j.id, '生成超时，点此重新生成'));
+  });
+  reconcileOcrDocs();
+}
+
+/**
+ * 把"没有活任务、却还停在解析中"的资料捞出来。
+ *
+ * 为什么必须有这一步：OCR 任务的失败路径有好几条（僵死、超时、进程重启丢掉
+ * 内存里的任务、任务被清理），而文档状态是**落库**的。少了这个对账，
+ * 用户会看到一份永远转圈的《数学·六年级·上册》，既没有进度也没有重试按钮 ——
+ * 比直接报错难查得多。
+ */
+function reconcileOcrDocs() {
+  let rows;
+  try { rows = D.all("SELECT id, space_id FROM kb_documents WHERE status = 'parsing'"); }
+  catch (e) { return; }
+  rows.forEach(r => {
+    const alive = D.get("SELECT 1 FROM jobs WHERE doc_id = ? AND status IN ('pending','running') LIMIT 1", r.id);
+    if (alive) return;
+    try {
+      kb.failDocumentParse(r.space_id, r.id, '识别任务中断了，点「重新识别」可以再来一次。');
+    } catch (e) { /* 对账失败不能反过来把 worker 拖死 */ }
   });
 }
 
@@ -578,7 +566,7 @@ const PLAN_PROMPT = `你在帮一名中学生把一份学习计划整理成一�
 严格从下面这段答复里抽取信息，输出一个 JSON 代码块（不要任何解释文字）：
 
 \`\`\`svg-json
-{"kind":"plancard","title":"20天数学冲刺计划","subtitle":"北师大版六年级上册 · 自学","days":[{"label":"第1-2天","theme":"分数混合运算","points":["先乘除后加减","连除转乘倒数"],"focus":"0.6 = 60%，75% = 3/4"}],"tips":["每天 2~3 小时：先看例题，再做练习，最后订正"]}
+{"kind":"plancard","title":"20天数学冲刺计划","subtitle":"分数与百分数 · 自学","days":[{"label":"第1-2天","theme":"分数混合运算","points":["先乘除后加减","连除转乘倒数"],"focus":"0.6 = 60%，75% = 3/4"}],"tips":["每天 2~3 小时：先看例题，再做练习，最后订正"]}
 \`\`\`
 
 字段要求：
@@ -595,6 +583,9 @@ const PLAN_PROMPT = `你在帮一名中学生把一份学习计划整理成一�
 5. focus＝这组最值得记住的**一句**（公式或易错点），不超过 20 个字；没有就不写这个字段。
 6. tips＝答复里的提醒，0~3 条，每条不超过 40 个字。
 7. title / subtitle：从答复里取；取不到就起一个朴素的标题（如"学习计划"）。
+   ★ **subtitle 里绝对不要出现任何教材版本名**（如"人教版""北师大版""苏教版""部编版"，
+   以及"X年级上册/下册"这种配套说法）。subtitle 只写**学了什么**（如"分数与百分数 · 自学"）。
+   答复里带了版本名也**不要照抄** —— 这条是硬要求，没有例外。
 8. 全部用中学生看得懂的大白话，不要出现"赋能""体系化""闭环""抓手"这类词。
 9. **只输出那一个 JSON**，前后不要有任何解释。`;
 
@@ -888,6 +879,97 @@ async function runImageJob(job) {
   finishJob(job.id, art);
 }
 
+// ---------- 扫描件 OCR 任务 ----------
+/**
+ * 把一份扫描件 PDF 逐页识别成文字。
+ *
+ * 为什么必须走异步任务：一本教材 = 上百次视觉模型调用，几分钟起步。
+ * 卡在 HTTP 请求里会超时，用户在资料列表里也看不到任何进展。
+ *
+ * 三条不能省的纪律：
+ *   ① 心跳要自己续 —— 单页超时 90 秒、还要重试一次，比"任务僵死"阈值（70 秒）长，
+ *      不自己续心跳，正在正常跑的活会被 sweepStale 当尸体清掉。
+ *   ② 进度要真写库 —— 「识别中 37/130」得是真数字，不是装饰性转圈。
+ *   ③ 部分失败要如实说 —— 少数几页没识别出来，和"书里本来没有这一页"是两回事，
+ *      后者会让 AI 用"教材里没有讲"去误导学生。
+ */
+async function runOcrJob(job) {
+  const p = job.input || {};
+  const docId = p.docId;
+  const row = kb.getDocumentRow(job.spaceId, docId);
+  if (!row) throw new Error('这份资料已经不在了');
+  // 下面几条"跑不起来"的原因都要**顺手把文档状态改掉**：
+  // 只让任务失败、把文档留在 parsing，用户就会看到一份永远转圈的资料。
+  if (!row.storage_path) {
+    kb.failDocumentParse(job.spaceId, docId, '原件已经不在了，请重新上传这份资料。');
+    throw new Error('原件已经不在了，请重新上传');
+  }
+  let buf;
+  try { buf = fs.readFileSync(row.storage_path); }
+  catch (e) {
+    kb.failDocumentParse(job.spaceId, docId, '读不到原件，请重新上传这份资料。');
+    throw new Error('读不到原件，请重新上传');
+  }
+
+  const cfg = ocr.ocrConfig();
+  if (!cfg.enabled) {
+    kb.failDocumentParse(job.spaceId, docId, ocr.OCR_DISABLED_NOTE);
+    throw new Error(ocr.OCR_DISABLED_NOTE);
+  }
+
+  const images = extract.pdfPageImages(buf);
+  if (!images.length) {
+    kb.failDocumentParse(job.spaceId, docId,
+      '这是一份扫描件，但没能从中取出逐页的图片，无法识别文字。建议换成可复制文字的 PDF。');
+    finishJob(job.id, { docId: docId, pages: 0, ok: 0, failed: 0, chars: 0 });
+    return;
+  }
+  const total = Math.min(images.length, cfg.maxPages || images.length);
+  const truncated = total < images.length;
+  touchJob(job.id, '正在识别第 1 / ' + total + ' 页…');
+
+  // 自己续心跳：一页最长可能占住 90 秒 × 2 次重试，比僵死阈值长得多。
+  const beat = setInterval(() => { try { touchJob(job.id, ''); } catch (_) {} }, Math.floor(JOB_HEARTBEAT_MS / 2));
+
+  let res;
+  try {
+    res = await ocr.ocrImages(images, {
+      onPage: function (s) {
+        try {
+          kb.setDocumentProgress(job.spaceId, docId, Math.round(s.done / s.total * 100));
+          touchJob(job.id, '已识别 ' + s.done + ' / ' + s.total + ' 页…');
+        } catch (_) {}
+      },
+    });
+  } finally {
+    clearInterval(beat);
+  }
+
+  const text = ocr.assembleOcrText(res.pages);
+  const okPages = res.pages.filter(function (t) { return String(t || '').trim(); }).length;
+  if (!text) {
+    kb.failDocumentParse(job.spaceId, docId,
+      '这份扫描件没能识别出文字（' + res.failed.length + ' 页识别失败）。可能是图片太模糊，或者整本都是插图。');
+    finishJob(job.id, { docId: docId, pages: total, ok: 0, failed: res.failed.length, chars: 0 });
+    return;
+  }
+  const notes = [];
+  if (res.failed.length) {
+    notes.push('有 ' + res.failed.length + ' 页没识别成功（第 '
+      + res.failed.slice(0, 8).map(function (f) { return f.page; }).join('、')
+      + (res.failed.length > 8 ? ' 等' : '') + ' 页），其余已入库。可点「重新识别」再试一次。');
+  }
+  if (truncated) notes.push('按设置只识别了前 ' + total + ' 页。');
+  kb.saveOcrText(job.spaceId, docId, text, { pages: total, note: notes.join(' ') || null });
+  touchJob(job.id, '识别完成');
+  finishJob(job.id, {
+    docId: docId, pages: total, ok: okPages,
+    failed: res.failed.length, chars: text.length, truncated: truncated,
+  });
+}
+
+registerRunner('ocr', runOcrJob);
+
 registerRunner('image', runImageJob);
 // interactive 任务由 interactive.js 自己 finishJob（含自愈与 preset 兜底），worker 不参与生成。
 // 挂一个空 runner只是为了让 chat.createJob(spaceId, userId, 'interactive', payload) 通过 RUNNERS 校验，
@@ -940,12 +1022,50 @@ function saveImage(spaceId, { filename, dataBase64, conversationId }) {
   };
 }
 
+/**
+ * 给一份「扫描件」排 OCR 任务。
+ *
+ * 单独抽出来的原因：有**两个入口**都要排队 —— 上传入库（saveDocument），
+ * 以及用户在列表里点「重新识别」（reparse）。只做前者的话，重新识别会
+ * 把状态改成 parsing 却没人去跑，文档永远转圈。
+ *
+ * 返回 jobId；排不上队返回 null，并把文档改成可重试的失败态。
+ */
+function queueOcrJob(spaceId, userId, doc) {
+  if (!doc || !doc.id) return null;
+  let job = null;
+  try {
+    job = createJob(spaceId, userId, 'ocr', {
+      docId: doc.id, filename: doc.filename, pages: doc.pages,
+      conversationId: doc.conversationId || null,
+    });
+    // 把任务和资料绑起来：任务被清掉时靠它把文档从"识别中"捞出来
+    // （见 reconcileOcrDocs）—— 不然文档会永远停在解析中。
+    D.run('UPDATE jobs SET doc_id = ? WHERE id = ?', doc.id, job.id);
+    return job.id;
+  } catch (e) {
+    // 排不上队必须立刻改状态 —— 否则这份资料会永远停在"解析中"，
+    // 用户既看不到进度也不明白哪里错了。
+    const why = '识别任务没能排上队，请点「重新识别」重试。';
+    try { kb.failDocumentParse(spaceId, doc.id, why); } catch (_) {}
+    doc.status = 'failed'; doc.error = why; doc.state = 'todo'; doc.stateText = '需处理';
+    return null;
+  }
+}
+
 function saveDocument(spaceId, userId, { filename, dataBase64, text, conversationId, categoryId, projectId, scope }) {
   const doc = kb.addDocument(spaceId, userId, {
     filename: filename, dataBase64: dataBase64, text: text,
     categoryId: categoryId, projectId: projectId,
     conversationId: conversationId, scope: scope || (conversationId ? 'temp' : 'kb'),
   });
+  // 扫描件：kb 只把它标成 parsing，真正"排队去识别"这一步在这里做 ——
+  // kb.js 不该依赖任务系统（它还要能在没有 worker 的脚本里被单独调用），反过来才顺。
+  if (doc && doc.scanned) {
+    const jobId = queueOcrJob(spaceId, userId, doc);
+    if (jobId) doc.jobId = jobId;
+    delete doc.scanned;
+  }
   return doc;
 }
 
@@ -1104,6 +1224,78 @@ function listFavorites(spaceId) {
   return rows.map(m => Object.assign(core.shapeMessage(m), { conversationTitle: m.conv_title }));
 }
 
+// ============================================================
+// 三·五、图片：链接里的图 / 学生上传的图 —— 交给视觉模型变成文字
+// ============================================================
+/**
+ * 读链接（**含图片**）。
+ *
+ * webdoc 只负责"把字节抓回来"：网页出正文，图片就把字节原样交给我们。
+ * 图片这一步必须在**这一层**合流 —— 只有这里知道有没有视觉模型可用，
+ * 而 webdoc 不该为了"读网页"这件事背上 OCR 的依赖。
+ *
+ * 转不成文字的图片**如实记进 failed**：不能让它静默消失在"已读取"里，
+ * 那等于告诉模型"那张图是空的"。
+ */
+async function readLinks(urls, o) {
+  const res = await webdoc.readLinks(urls, o);
+  const pages = [];
+  const failed = (res.failed || []).slice();
+  for (const p of res.pages || []) {
+    if (!p.image) { pages.push(p); continue; }
+    let text = '';
+    try { text = await ocr.describeImage(p.data, { mime: p.mime }); }
+    catch (e) { text = ''; }
+    if (text) {
+      pages.push({
+        url: p.url, finalUrl: p.finalUrl, fromImage: true, title: '图片',
+        text: text, truncated: false, chars: text.length,
+      });
+    } else {
+      failed.push({ url: p.url, reason: 'IMAGE', message: '这是一张图片，但没能识别出里面的内容（可能是识别模型没配好，或者图太糊了）' });
+    }
+  }
+  return {
+    ok: pages.length > 0, urlCount: res.urlCount, pages, failed,
+    imageCount: (res.pages || []).filter(p => p.image).length,
+  };
+}
+
+/**
+ * 学生随消息上传的图片 → 文字。
+ *
+ * ★ 旧行为是告诉模型"你看不到图片内容本身"，于是模型只会回一句
+ *   "请你用文字描述图里最关键的条件"。孩子拍了张错题照片来问，得到这个回答，
+ *   是产品最不该出现的一幕（拍照问题比打字自然得多）。
+ *
+ * 现在：**有视觉模型就真的看图**，把它转成文字喂给主模型；识别不了就如实说。
+ * 上限 3 张 —— 一次发十张图去识别会把配额和等待时间都拖爆。
+ *
+ * @returns {{text:string, ok:number, failed:number, total:number}}
+ */
+async function describeAttachments(spaceId, atts) {
+  const imgs = (Array.isArray(atts) ? atts : []).filter(a => a && a.kind === 'image').slice(0, 3);
+  if (!imgs.length) return { text: '', ok: 0, failed: 0, total: 0 };
+  const blocks = [];
+  let ok = 0, failed = 0;
+  for (let i = 0; i < imgs.length; i++) {
+    const a = imgs[i];
+    const name = String(a.name || ('图片' + (i + 1)));
+    let buf = null;
+    try {
+      if (a.path) buf = fs.readFileSync(a.path);
+      else if (a.id) { const rd = readAttachment(spaceId, a.id); if (rd) buf = fs.readFileSync(rd.path); }
+    } catch (e) { buf = null; }
+    if (!buf || !buf.length) { failed++; blocks.push('《' + name + '》：文件读不到。'); continue; }
+    if (buf.length > IMAGE_MAX_BYTES) { failed++; blocks.push('《' + name + '》：图片太大（超过 ' + Math.round(IMAGE_MAX_BYTES / 1048576) + 'MB）。'); continue; }
+    let txt = '';
+    try { txt = await ocr.describeImage(buf, { mime: a.mime }); } catch (e) { txt = ''; }
+    if (txt) { ok++; blocks.push('《' + name + '》：\n' + txt); }
+    else { failed++; blocks.push('《' + name + '》：没能识别出内容（当前没有可用的识别模型，或者图片太模糊）。'); }
+  }
+  return { text: blocks.join('\n\n'), ok, failed, total: imgs.length };
+}
+
 module.exports = {
   // TTS
   TTS_MAX_CHARS, speak, getTtsPref, setTtsPref, clampRate,
@@ -1111,16 +1303,20 @@ module.exports = {
   DIRECTIONS, detectDirection, translateMessage,
   // 搜索
   webSearch, searchContext, searchConfig,
-  // 读链接（学生直接甩 URL 过来时真的去看那个页面）
-  extractUrls: webdoc.extractUrls, readLinks: webdoc.readLinks, linkContext: webdoc.linkContext,
+  // 读链接（学生直接甩 URL 过来时真的去看那个页面；图片直链交给视觉模型看成文字）
+  extractUrls: webdoc.extractUrls, readLinks, linkContext: webdoc.linkContext,
+  // 学生上传的图片 → 文字（旧行为只会告诉模型"你看不到图片"，那是产品硬伤）
+  describeAttachments,
   // 任务
-  JOB_HEARTBEAT_MS, JOB_STALE_MS, registerRunner, createJob, getJob, listJobs,
+  JOB_HEARTBEAT_MS, JOB_STALE_MS, JOB_MAX_MS, registerRunner, createJob, getJob, listJobs,
   touchJob, finishJob, failJob, tick, startWorker, stopWorker, sweepStale,
   imageConfig, generateIllustration, sanitizeElements, ILLU_FIELDS, shouldIllustrate,
   PLAN_PROMPT, PLAN_LIMITS, sanitizePlan, shouldPlanCard, generatePlanCard,
   aiArtConfig, shouldConceptArt, buildArtScene, generateAIImage, attachArtifact,
   // 上传
   IMAGE_MAX_BYTES, IMAGE_TYPES, saveImage, saveDocument, readAttachment, extOf,
+  // 扫描件 OCR（runOcrJob / queueOcrJob 导出是为了测试能直接驱动它们）
+  runOcrJob, queueOcrJob,
   // 临时资料
   listTempDocs, tempDocStatus, removeTempDoc,
   // 智能体 / 模型 / 分享

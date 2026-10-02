@@ -174,12 +174,29 @@ const skills = require('./server/skills');
   await rejects(() => chat.translateMessage(sid, 'm_没有', 'zh2en'), 'NOT_FOUND', '翻译不存在的消息');
 
   // ---------- 7. 联网搜索 ----------
+  // ★ 2026-10-02 改了语义：以前 `enabled` 等价于"配了 WEB_SEARCH_URL"，
+  //   没配就直接不可用 —— 用户看到的是"联网功能测试无效"。现在内置通道默认开着，
+  //   环境变量只是"想换更好的源"。**不变的那条硬规矩**是：失败必须如实告知。
   const s1 = await chat.webSearch('中考数学');
-  ok(s1.ok === false && s1.reason === 'UNAVAILABLE', '未配搜索通道时如实返回不可用');
-  ok(s1.message === '联网搜索暂时不可用，本条回答未联网', '降级文案与对方一致');
+  ok(s1.ok === true || (s1.ok === false && s1.message === '联网搜索暂时不可用，本条回答未联网'),
+    '联网失败必须如实告知（不许静默降级成"看起来像搜过"）', JSON.stringify({ ok: s1.ok, reason: s1.reason }));
+  ok(s1.ok === true || s1.reason !== 'UNAVAILABLE', '不会再因为"没配环境变量"就直接判不可用', s1.reason);
+  const s1b = await chat.webSearch('中考数学', { limit: 3 });
+  ok(!s1b.ok || s1b.results.length <= 3, 'limit 真的生效');
+
+  // 反证：只有**显式关掉**内置通道才是 DISABLED
+  const saveBuiltin = process.env.WEB_SEARCH_BUILTIN;
+  process.env.WEB_SEARCH_BUILTIN = 'off';
+  const s1c = await chat.webSearch('中考数学');
+  ok(s1c.ok === false && s1c.reason === 'DISABLED', '显式关闭后如实返回不可用');
+  ok(s1c.message === '联网搜索暂时不可用，本条回答未联网', '降级文案与对方一致');
+  if (saveBuiltin === undefined) delete process.env.WEB_SEARCH_BUILTIN;
+  else process.env.WEB_SEARCH_BUILTIN = saveBuiltin;
+
   const s2 = await chat.webSearch('');
   ok(s2.ok === false && s2.reason === 'EMPTY', '空查询直接拒绝');
   ok(chat.searchContext([{ title: 'T', url: 'u', snippet: 's' }]).indexOf('[网页1]') === 0, '搜索结果拼上下文');
+  ok(chat.searchContext([]) === '' && chat.searchContext(null) === '', '没有结果时上下文是空的');
 
   // ---------- 8. 假上游：搜索 / TTS / 配图 ----------
   const upstream = http.createServer(async (req, res) => {

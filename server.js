@@ -58,6 +58,7 @@ const pet = require('./server/pet');
 const dash = require('./server/dashboard');
 const daily = require('./server/daily');
 const weekly = require('./server/weekly');
+const parent = require('./server/parent');
 const skills = require('./server/skills');
 const kb = require('./server/kb');
 const english = require('./server/english');
@@ -66,7 +67,7 @@ const pool = require('./server/pool');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-02-parity16';
+const APP_VERSION = '2026-10-02-parity24';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -226,6 +227,17 @@ async function streamReply(req, res, ctx, sid, opt) {
     if (agentPrompt.length) skillPrompts = skillPrompts.concat(agentPrompt);
   }
 
+  // 对话级临时资料（聊天窗口粘贴 / 「＋」传进来的）。只靠检索会漏：
+  // 问得泛（"帮我看看这份卷子"）时一条都命中不了，模型手里就完全没有这份资料 ——
+  // 用户看到的现象就是"AI 没读我粘贴的文档"。所以清单无条件带上，正文留着零命中时兜底。
+  let tempDocs = [];
+  try {
+    tempDocs = chat.listTempDocs(sid, conv.id).map(d => ({
+      filename: d.filename, status: d.status, error: d.error,
+      text: d.status === 'ready' ? ((kb.getDocument(sid, d.id) || {}).text || '') : '',
+    }));
+  } catch (e) { tempDocs = []; }
+
   let system = llm.buildSystemPrompt({
     mode: opt.mode || 'selfstudy',
     spaceName: (auth.getSpace(sid) || {}).name,
@@ -235,18 +247,40 @@ async function streamReply(req, res, ctx, sid, opt) {
     memories: mem.enabled ? mem.memories.slice(0, 12) : [],
     skillPrompts: skillPrompts,
     docContext: docCtx.text,
+    tempDocs: tempDocs,
   });
+  // 学生随消息发来的图片：**真的看一眼**，再把内容以文字形式交给模型。
+  // ★ 2026-10-02 改：以前这里只写"你看不到图片内容本身" —— 一个"拍错题来问"
+  //   的产品，最常用的入口却只能让 AI 回一句"请你描述一下图里的条件"，是硬伤。
+  //   现在走视觉模型转文字（主模型没有视觉能力，但读文字很在行）。
   if (opt.attachments && opt.attachments.length) {
-    const imgs = opt.attachments.filter(a => a.kind === 'image');
+    const imgs = opt.attachments.filter(a => a && a.kind === 'image');
     if (imgs.length) {
-      system += `\n\n【学生这次随消息发来的图片】\n${imgs.map(a => '- ' + a.name).join('\n')}\n` +
-        `你看不到图片内容本身。**不要假装看见了**，直接说明这一点，让他用文字描述图里最关键的条件。\n` +
-        `（骗学生"我看到了"是最坏的做法：他会以为你看错了，而不是以为自己没说清楚。）`;
+      let seen = { text: '', ok: 0, failed: 0, total: imgs.length };
+      try { seen = await chat.describeAttachments(sid, imgs); } catch (e) { seen = { text: '', ok: 0, failed: imgs.length, total: imgs.length }; }
+      if (seen.ok) {
+        system += `\n\n【学生这次随消息发来的图片（已识别出内容，请直接使用）】\n${seen.text}\n`
+          + `★ 这些就是他刚发给你的图片，内容已经转成文字放在上面。**不要再问"能不能描述一下图里的内容"**，直接依据它回答。`;
+      } else {
+        system += `\n\n【学生这次随消息发来的图片】\n${imgs.map(a => '- ' + a.name).join('\n')}\n`
+          + `★ 这几张图**没能识别出内容**（原因见下），你看不到它们，不要假装看见了：\n${seen.text}\n`
+          + `直接说明读不出来，并请他用文字说明图里最关键的条件。\n`
+          + `（骗学生"我看到了"是最坏的做法：他会以为你看错了，而不是以为自己没说清楚。）`;
+      }
     }
   }
   if (searchRes && searchRes.ok && searchRes.results.length) {
     system += `\n\n【本次联网搜索结果】\n${chat.searchContext(searchRes.results)}\n\n` +
       `引用网页时说明是第几条。仍然不要直接把结论给学生，用这些材料去反问。`;
+  } else if (searchRes && searchRes.ok) {
+    // ★ 联网是通的，但搜到的东西跟这个问题无关（搜索引擎丢词回退的产物）。
+    //   这一支以前是空的 —— 意味着模型完全不知道自己没材料，最容易照着常识硬编。
+    //   必须把"没材料"这件事明确告诉它，让它凭知识答并说明是凭知识。
+    system += `\n\n【联网搜索】本次联网成功，但${searchRes.message || '没有搜到相关网页'}`
+      + `（搜索引擎返回的都是跟这个话题沾边的泛泛页面，已经全部丢弃，没有一条能用）。\n`
+      + `★ 回答时**不要声称查过网、也不要引用任何网页**。就当作没联网处理：`
+      + `能凭你自己的知识答就答，并说清楚这是依据你掌握的内容、不是查到的；`
+      + `拿不准就直说这个问题建议他去查官方的最新口径。严禁为了显得"查到了"而编造网页或数据。`;
   } else if (searchRes && !searchRes.ok) {
     system += `\n\n【联网搜索】本次未能联网（${searchRes.message}）。回答时不要声称查过网络。`;
   }
@@ -258,7 +292,9 @@ async function streamReply(req, res, ctx, sid, opt) {
   const linkMeta = linkRes ? {
     urlCount: linkRes.urlCount || 0,
     read: (linkRes.pages || []).length,
-    pages: (linkRes.pages || []).map(p => ({ url: p.finalUrl, title: p.title })),
+    // 读到的图片张数：前端据此把提示写成"已读取 1 张图片"，而不是笼统的"1 个链接"
+    images: linkRes.imageCount || 0,
+    pages: (linkRes.pages || []).map(p => ({ url: p.finalUrl, title: p.title, image: !!p.fromImage })),
     errors: (linkRes.failed || []).map(f => ({ url: f.url, message: f.message })),
   } : null;
 
@@ -415,7 +451,7 @@ async function handleApi(req, res, u) {
       ok: true, version: APP_VERSION,
       apis: ['auth', 'sms', 'docs', 'avatars', 'session', 'announcements', 'spaces', 'chat', 'stream',
         'messages', 'tts', 'translate', 'favorites', 'upload', 'tempdocs', 'jobs', 'agents', 'search', 'shares',
-        'projects', 'memory', 'share', 'cards', 'flashcards', 'pet', 'skills', 'kb', 'dashboard', 'daily', 'english', 'exam', 'pool'],
+        'projects', 'memory', 'share', 'cards', 'flashcards', 'pet', 'skills', 'kb', 'dashboard', 'daily', 'weekly', 'parent', 'english', 'exam', 'pool'],
       mockLLM: llm.isMock(),
       adminPanel: !!ADMIN_PASSWORD,
     });
@@ -546,6 +582,31 @@ async function handleApi(req, res, u) {
     if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });
     if (!ADMIN_TOKENS.has(reqToken(req))) return sendJSON(res, 401, { error: 'NO_AUTH' });
     return sendJSON(res, 200, { ok: true, spaces: auth.listSpaces() });
+  }
+
+  // ---------- 管理员：用户管理 ----------
+  // 以前只有一个"空间列表"，管理员**看得见用户却管不着**——不能禁用、不能重置密码。
+  // 删号不做：学生攒下的对话和错题是家长的资产，删掉不可逆；停用 + 可恢复才对。
+  if (p === '/api/admin/users' && method === 'GET') {
+    if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });
+    if (!ADMIN_TOKENS.has(reqToken(req))) return sendJSON(res, 401, { error: 'NO_AUTH' });
+    try { return sendJSON(res, 200, { ok: true, users: auth.listUsers() }); }
+    catch (e) { return sendJSON(res, 500, { error: 'LIST_FAILED', message: e.message }); }
+  }
+  const admUserM = p.match(/^\/api\/admin\/users\/([^/]+)\/(disabled|password)$/);
+  if (admUserM && method === 'POST') {
+    if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });
+    if (!ADMIN_TOKENS.has(reqToken(req))) return sendJSON(res, 401, { error: 'NO_AUTH' });
+    const who = decodeURIComponent(admUserM[1]);
+    const b = await readBody(req);
+    try {
+      if (admUserM[2] === 'disabled') return sendJSON(res, 200, { ok: true, ...auth.setUserDisabled(who, !!b.disabled, b.reason) });
+      return sendJSON(res, 200, { ok: true, ...auth.adminResetPassword(who, b.password) });
+    } catch (e) {
+      const code = e.code || 'BAD_INPUT';
+      const status = code === 'NOT_FOUND' ? 404 : (code === 'BAD_PASSWORD' ? 400 : 400);
+      return sendJSON(res, status, { error: code, message: e.message });
+    }
   }
   // 管理员发公告
   if (p === '/api/admin/announcements' && method === 'POST') {
@@ -1081,6 +1142,52 @@ async function handleApi(req, res, u) {
     }
   }
 
+  // ---------- 历史周报（批次22）----------
+  // ★ 关键设计：weekly_reports 表**只存人写的那两问**，汇总数字永不落库。
+  //   所以下面这些接口里的数字全是现算的（history 也现算），溯源才指向原始记录而不是自己的副本。
+  if (p === '/api/weekly/history' && method === 'GET') {
+    return sendJSON(res, 200, { ok: true, weeks: weekly.history(sid, u.searchParams.get('limit')) });
+  }
+  // 某一段日期的「人写的那段」。没写过返回 null（不是空对象 —— 两者含义不同）。
+  if (p === '/api/weekly/note' && method === 'GET') {
+    try {
+      return sendJSON(res, 200, { ok: true, note: weekly.getNote(sid, u.searchParams.get('from'), u.searchParams.get('to')) });
+    } catch (e) {
+      return sendJSON(res, 400, { error: e.code || e.message || 'BAD_INPUT', message: e.message });
+    }
+  }
+  // 数字逐项溯源：把 summary 里某个数字拆回原始记录（跨天，每项带 date）。
+  if (p === '/api/weekly/evidence' && method === 'GET') {
+    try {
+      return sendJSON(res, 200, { ok: true, ...weekly.evidenceByMetric(sid, u.searchParams.get('from'), u.searchParams.get('to'), u.searchParams.get('metric')) });
+    } catch (e) {
+      return sendJSON(res, 400, { error: e.code || e.message || 'BAD_INPUT', message: e.message });
+    }
+  }
+  const wDraft = p.match(/^\/api\/weekly\/note\/(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/);
+  if (wDraft && method === 'POST') {
+    const b = await readBody(req);
+    try {
+      const note = b && b.finalize
+        ? weekly.finalize(sid, wDraft[1], wDraft[2], b.answers)
+        : weekly.saveDraft(sid, wDraft[1], wDraft[2], b.answers);
+      return sendJSON(res, 200, { ok: true, note: note });
+    } catch (e) {
+      return sendJSON(res, 400, { error: e.code || e.message || 'BAD_INPUT', message: e.message });
+    }
+  }
+
+  // ---------- 家长端（批次20）----------
+  // ★ 家长端没有自己的表；所有数字从 activity / card_reviews / cards 现算。
+  //   它回答的不是"我做了什么"（看板），而是"我能做什么"。
+  if (p === '/api/parent' && method === 'GET') {
+    try {
+      return sendJSON(res, 200, { ok: true, view: parent.build(sid, u.searchParams.get('from'), u.searchParams.get('to')) });
+    } catch (e) {
+      return sendJSON(res, 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
+  }
+
   // ---------- 能力中心（P7）----------
   if (p === '/api/skills' && method === 'GET') {
     return sendJSON(res, 200, {
@@ -1143,11 +1250,17 @@ async function handleApi(req, res, u) {
     // 文件以 base64 走 JSON（不引入 multipart 解析），上限放到 36MB
     const b = await readBody(req, 36 * 1024 * 1024);
     try {
-      const doc = kb.addDocument(sid, ctx.userId, {
+      // ★ 必须走 chat.saveDocument 而不是 kb.addDocument：扫描件要在这里排队做 OCR。
+      //   直接调 kb 的话，文档会被标成「识别中」却没有任何任务去跑 —— 永远转圈。
+      const doc = chat.saveDocument(sid, ctx.userId, {
         filename: b.filename, dataBase64: b.dataBase64, text: b.text,
         categoryId: b.categoryId, projectId: b.projectId,
       });
-      return sendJSON(res, doc.status === 'ready' ? 200 : 422, { ok: doc.status === 'ready', document: doc });
+      // 「识别中」是**已接受、正在处理**，不是 unprocessable。回 422 会让前端
+      // 把它算成上传失败，用户看到的就是"扫描件传不上去"——正是这次报障的观感。
+      return sendJSON(res, doc.status === 'failed' ? 422 : 200, {
+        ok: doc.status !== 'failed', document: doc,
+      });
     } catch (e) {
       // FULL 给 409：它是"目标位置满了"这种冲突，不是参数错，前端要据此提示"先扩容"
       const st = e.code === 'TOO_BIG' ? 413 : e.code === 'FULL' ? 409 : e.code === 'NOT_FOUND' ? 404 : 400;
@@ -1168,7 +1281,17 @@ async function handleApi(req, res, u) {
       catch (e) { return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : e.code === 'FULL' ? 409 : 400, { error: e.code, message: e.message }); }
     }
     if (act === 'reparse' && method === 'POST') {
-      try { return sendJSON(res, 200, { ok: true, document: kb.reparseDocument(sid, id) }); }
+      try {
+        const doc = kb.reparseDocument(sid, id);
+        // 扫描件「重新识别」= 重新排一次 OCR。少了这一段，点了按钮只会把状态
+        // 改成 parsing，却没人去跑 —— 又是永远转圈。
+        if (doc && doc.scanned) {
+          const jid = chat.queueOcrJob(sid, ctx.userId, doc);
+          if (jid) doc.jobId = jid;
+          delete doc.scanned;
+        }
+        return sendJSON(res, 200, { ok: true, document: doc });
+      }
       catch (e) { return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { error: e.code || 'BAD_INPUT', message: e.message }); }
     }
     if (act === 'text' && method === 'GET') {

@@ -68,10 +68,10 @@ ok('有上传入口（上传文档按钮）', KB.indexOf('上传文档') >= 0, n
 // ---------- 4. 被砍掉的视图都还在，且挂进知识库 ----------
 group('D. 9 个功能全部收进知识库，没有一个丢掉');
 const SUBS = ['view-cards', 'view-exam', 'view-en', 'view-pool', 'view-projects',
-  'view-dash', 'view-skills', 'view-memory', 'view-settings'];
+  'view-dash', 'view-parent', 'view-skills', 'view-memory', 'view-settings'];
 const kbSubs = (KB.match(/<div class="kb-sub" id="([a-z-]+)"/g) || [])
   .map(s => /id="([a-z-]+)"/.exec(s)[1]);
-ok('知识库里有 10 个分区（含资料）', kbSubs.length === 10, kbSubs);
+ok('知识库里有 11 个分区（含资料）', kbSubs.length === 11, kbSubs);
 SUBS.forEach(id => ok('分区 ' + id + ' 在知识库里', kbSubs.indexOf(id) >= 0, kbSubs));
 ok('资料分区是 sub-docs', kbSubs.indexOf('sub-docs') >= 0, kbSubs);
 // 关键控件还在（这些 id 是各功能自己的入口，重构时最容易误删）

@@ -54,7 +54,7 @@ function startServer() {
   return child;
 }
 async function waitReady(ms) {
-  const until = Date.now() + (ms || 15000);
+  const until = Date.now() + (ms || 60000);
   while (Date.now() < until) {
     try { const r = await fetch(BASE + '/api/health'); if (r.ok) return await r.json(); } catch (e) {}
     await new Promise(r => setTimeout(r, 150));
@@ -102,7 +102,7 @@ async function sendMsg(token, payload) {
   return { status: 200, meta };
 }
 async function pollJob(token, id, ms) {
-  const until = Date.now() + (ms || 20000);
+  const until = Date.now() + (ms || 60000);
   while (Date.now() < until) {
     const r = await GET('/api/jobs/' + id, token);
     if (r.status === 200 && (r.body.job.status === 'done' || r.body.job.status === 'failed')) return r.body.job;

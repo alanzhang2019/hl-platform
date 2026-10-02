@@ -16,6 +16,25 @@ const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
 
+// ★ 本套件的 `rawGet` 一律 `agent: false`（见下方），这是防连接池污染的关键。
+//
+//   背景（同一类问题踩过两次，两次报错点都跟病因差了十万八千里）：
+//   本套件的核心用例是「故意发畸形/越界路径去撞静态护栏」，而护栏对越界请求的处理是
+//   **直接 destroy socket、连响应头都不写**。若这些请求参与全局连接复用，
+//   被单方面掐掉的连接会被留在池子里，**下一个无关请求**随机撞上 ECONNRESET：
+//     · 第一次（全量回归）：四条越界断言全绿，然后**几十行之后**的
+//       SPA 回退断言（`fetch(BASE + '/s/abcdef')`）报 ECONNRESET。
+//     · 第二次（单跑）：报在**更早**的「对话与 SSE 流式」第一条 `sse()` 上
+//       —— 位置与第一次完全不同。**随机位置 = 池子污染，不是逻辑错。**
+//
+//   为什么只改 rawGet 而不全局禁 keep-alive：全局 fetch 的底层 undici 在本机
+//   **不是公开模块**（`require('undici')` 与 `require('internal/deps/undici/undici')`
+//   都 MODULE_NOT_FOUND，实测），拿不到 dispatcher 就没法从上游堵。
+//   但越界请求**只走 rawGet 这条路**（`http.request` 显式指定原始 path 才发得出去），
+//   所以把这条路的连接隔离掉，污染源就断了 —— 实测 `rawGet('/boom')` 之后
+//   连续三条 `fetch` 全部 200（探针 `_probe_dispatcher.cjs` 验过）。
+//   这**不削弱任何断言**：越界用例照样发原始路径撞护栏。
+
 const NODE = process.execPath;
 const PORT = 3200 + Math.floor(Math.random() * 300);
 const BASE = 'http://127.0.0.1:' + PORT;
@@ -53,7 +72,12 @@ const DEL = (p, t) => req('DELETE', p, undefined, t);
  */
 function rawGet(rawPath) {
   return new Promise((resolve, reject) => {
-    const r = http.request({ host: '127.0.0.1', port: PORT, method: 'GET', path: rawPath }, res => {
+    // ★ `agent: false` = 这条请求**不参与连接复用**。
+    //   本函数存在的意义就是**故意发畸形/越界路径去撞护栏**，而护栏对越界请求是
+    //   **直接 destroy socket、连响应头都不写**。若它复用连接，那条被单方面掐掉的
+    //   连接会留在池子里，让**下一条无关请求**随机报 ECONNRESET
+    //   （实测：越界断言全绿，几十行之后的 SPA 回退断言炸；单跑时又换个位置炸）。
+    const r = http.request({ host: '127.0.0.1', port: PORT, method: 'GET', path: rawPath, agent: false }, res => {
       let b = '';
       res.on('data', d => { b += d; });
       res.on('end', () => resolve({ status: res.statusCode, body: b }));
@@ -79,10 +103,17 @@ function startServer() {
   return child;
 }
 async function waitReady(ms) {
-  const until = Date.now() + (ms || 12000);
+  // ★ 60 秒，不是 12 秒。本机是一个 **C 盘 100% 占满、内存吃紧** 的机器，
+  //   `node server.js` 光是 SQLite 初始化 + 建表就可能吃掉十几秒。
+  //   12 秒会把「机器慢」报成「服务坏了」，而且报出来的是**一条与业务无关的
+  //   "服务在超时前没有就绪"**，看起来像代码崩了（实测：同一份代码手动起服务
+  //   只要几秒就打印出 `→ http://localhost:3999`，测试里却超时）。
+  //   全项目其它自带服务的套件早已统一提到 60 秒（见 `_run-tests.cjs`），
+  //   这里属于漏网的一个，补齐。
+  const until = Date.now() + (ms || 60000);
   while (Date.now() < until) {
     try { const r = await fetch(BASE + '/api/health'); if (r.ok) return await r.json(); } catch (e) {}
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise(r => setTimeout(r, 200));
   }
   throw new Error('服务在超时前没有就绪');
 }
@@ -579,7 +610,18 @@ async function sse(text, token, opts) {
     try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch (e) {}
   }
 
-  const spa = await fetch(BASE + '/s/abcdef');
+  // ★ 这一条紧跟在上面那批"故意撞护栏"的请求之后，是**整条回归里最容易假红的一条**：
+  //   它的上一条请求（编码越界 403）会让服务端直接 destroy socket，
+  //   若中间有连接被复用，这里就会报 ECONNRESET —— 而它跟被测行为毫无关系。
+  //   给它一次重试机会，只为区分"连接被掐"和"SPA 回退真的坏了"。
+  let spa = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { spa = await fetch(BASE + '/s/abcdef'); break; }
+    catch (e) {
+      if (attempt === 2) throw e;
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
   eq('SPA 回退把未知无扩展名路径交回前端', spa.status, 200);
   const nf = await fetch(BASE + '/nope.js');
   eq('未知 .js 返回 404', nf.status, 404);

@@ -57,7 +57,7 @@ function startServer() {
   return child;
 }
 async function waitReady(ms) {
-  const until = Date.now() + (ms || 20000);
+  const until = Date.now() + (ms || 60000);
   while (Date.now() < until) {
     try { const r = await fetch(BASE + '/api/health'); if (r.ok) return true; } catch (e) {}
     await sleep(150);

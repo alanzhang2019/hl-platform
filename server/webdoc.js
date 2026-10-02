@@ -5,7 +5,7 @@
  * 学生直接把一个链接甩过来时，AI 应该**真的打开看**，而不是把 URL 当成关键词去搜。
  * （搜索接口拿到 "https://…" 只会搜到一堆转载页，答出来的东西和那个页面无关。）
  *
- * 四条硬约束：
+ * 五条硬约束：
  *  1) ★ **必须防 SSRF**：服务器会去 fetch 用户给的任意 URL。不做校验的话，
  *     任何人只要把链接发进来，就能让服务器去打内网 / 云元数据服务
  *     （169.254.169.254 能拿到实例凭证）。所以要：只放行 http(s)、
@@ -15,6 +15,13 @@
  *  3) **正文要截断**：一篇长文几万字，整段塞进上下文会把对话历史挤掉。
  *     默认 6000 字/页、最多 3 页。
  *  4) **不引入第三方解析库**：只要 title + 正文文字，正则足够；少一个依赖少一处供应链风险。
+ *  5) ★ **图片链接不算失败**（2026-10-02 改）：学生发来的常常是**一张图片**的直链
+ *     （作业照片、题目截图）。旧逻辑只认 text/html，遇到 image/png 或
+ *     application/octet-stream 就报"这不是一个网页，我看不了" —— 学生看到的是
+ *     "AI 打不开我的图"，这在教育场景里是硬伤。
+ *     现在：识别出是图片 → 原样把字节带回去，由上层交给视觉模型转成文字再喂给模型。
+ *     **注意**：很多 CDN 对图片返回 application/octet-stream，扩展名也不可信，
+ *     所以这里按**魔数**判类型，不按 header。
  */
 const dns = require('dns').promises;
 
@@ -22,6 +29,9 @@ const MAX_LINKS = 3;
 const MAX_CHARS = 6000;
 const TIMEOUT_MS = 10000;
 const MAX_REDIRECTS = 3;
+// 图片直链大小上限：学生在微信里存的题图一般几百 KB，8MB 足够宽容，
+// 同时挡住"给个 200MB 的链接把服务端内存打满"。
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // 结尾的中文标点也要排除掉 —— 学生常写「看这个：https://x.com/a。」，句号不能带进 URL
@@ -44,6 +54,26 @@ function extractUrls(text, max) {
     if (out.length >= limit) break;
   }
   return out;
+}
+
+// ---------------------------------------------------------------- 图片识别
+
+/**
+ * 按**魔数**认图片格式。返回 mime，认不出返回空串。
+ *
+ * 为什么不能信 Content-Type：CDN / 对象存储经常把图片标成
+ * `application/octet-stream`（线上就是这么撞的 —— 学生发来的图链接被判成
+ * "这不是一个网页"，其实文件就是一张 png）。也不能信扩展名：URL 里常常没有。
+ */
+function sniffImage(buf) {
+  if (!buf || !buf.length || buf.length < 12) return '';
+  const b = buf;
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.slice(0, 3).toString('latin1') === 'GIF') return 'image/gif';
+  if (b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  if (b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp';
+  return '';
 }
 
 // ---------------------------------------------------------------- SSRF 防护
@@ -161,6 +191,25 @@ function htmlToText(html) {
 
 // ---------------------------------------------------------------- 抓取
 
+/** 把响应体读成图片字节；不是图片 / 太大 / 读不动都返回 null（交给上层报错） */
+async function readImage(res, ctype) {
+  const ct = String(ctype || '').split(';')[0].trim().toLowerCase();
+  const declared = /^image\//.test(ct) ? ct : '';
+  // 声明了图片就先看大小，别把一个几百 MB 的链接整个拉进内存
+  const len = Number((res.headers && res.headers.get ? res.headers.get('content-length') : 0) || 0);
+  if (len && len > MAX_IMAGE_BYTES) return { tooBig: true };
+  // 既不是 image/*、也不是 octet-stream / 空类型 —— 那多半真不是图，不浪费带宽去下
+  if (!declared && ct && ct !== 'application/octet-stream' && ct !== 'binary/octet-stream') return null;
+
+  let buf;
+  try { buf = Buffer.from(await res.arrayBuffer()); } catch (e) { return null; }
+  if (!buf.length) return null;
+  if (buf.length > MAX_IMAGE_BYTES) return { tooBig: true };
+  const mime = declared || sniffImage(buf);        // ★ octet-stream 靠魔数兜底
+  if (!mime) return null;
+  return { mime: mime, data: buf, bytes: buf.length };
+}
+
 /** 抓一页。**任何失败都返回 {ok:false, message} 而不是抛** —— 上层要能原样转达给学生 */
 async function fetchOne(rawUrl, o) {
   const opts = o || {};
@@ -189,7 +238,7 @@ async function fetchOne(rawUrl, o) {
         redirect: 'manual',
         headers: {
           'User-Agent': UA,
-          Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
+          Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,image/*;q=0.8,*/*;q=0.5',
           'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6',
         },
         signal: AbortSignal.timeout(timeoutMs),
@@ -210,13 +259,24 @@ async function fetchOne(rawUrl, o) {
     if (!res.ok) return { ok: false, url: started, reason: 'HTTP', message: '网页返回 ' + res.status };
 
     const ctype = String((res.headers && res.headers.get ? res.headers.get('content-type') : '') || '');
-    if (ctype && !/text\/html|application\/xhtml|text\/plain/i.test(ctype)) {
-      return { ok: false, url: started, reason: 'TYPE', message: '这不是一个网页（' + (ctype.split(';')[0] || '未知类型') + '），我看不了里面是什么' };
+
+    // ★ 图片直链：不算失败，把字节带回去交给视觉模型看
+    const img = await readImage(res, ctype);
+    if (img && img.tooBig) return { ok: false, url: started, reason: 'TOO_BIG', message: '这张图片太大了（超过 8MB），可以让对方压缩后再发' };
+    if (img) {
+      return { ok: true, url: started, finalUrl: u.href, image: true, mime: img.mime, data: img.data, bytes: img.bytes, title: '', text: '' };
+    }
+
+    const ct = ctype.split(';')[0].trim().toLowerCase();
+    const isText = !ct || /text\/html|application\/xhtml|text\/plain|text\/xml|application\/xml|application\/json/.test(ct);
+    if (!isText) {
+      return { ok: false, url: started, reason: 'TYPE', message: '这个链接不是网页也不是图片（' + (ct || '未知类型') + '），我读不了里面是什么' };
     }
 
     let raw = '';
     try { raw = await res.text(); } catch (e) { return { ok: false, url: started, reason: 'READ', message: '网页内容读不出来' }; }
 
+    // JSON / XML 也走 htmlToText：它会把标签剥掉，至少能拿到纯文本
     const parsed = htmlToText(raw);
     let text = parsed.text;
     const truncated = text.length > maxChars;
@@ -232,6 +292,10 @@ async function fetchOne(rawUrl, o) {
 /**
  * 读一批链接。**不抛错**：成功与失败都原样返回，由上层决定怎么说。
  * 并发抓 —— 三个链接串行 + 各自 10 秒超时就是 30 秒白等。
+ *
+ * 图片页会带上 `image:true` + `data`（Buffer）。**本函数不做图像识别**：
+ * 那是上层的事（要有视觉模型），放在这里会让 webdoc 依赖模型通道，
+ * 也让"只读网页"这条链路白白背一个 OCR 的包。
  */
 async function readLinks(urls, o) {
   const opts = o || {};
@@ -251,7 +315,8 @@ function linkContext(res) {
   if (res.pages && res.pages.length) {
     parts.push('【学生发来的链接（已读取正文）】');
     res.pages.forEach((p, i) => {
-      parts.push('[链接' + (i + 1) + '] ' + (p.title || '（无标题）') + '\n' + p.finalUrl + '\n' + p.text +
+      const kind = p.fromImage ? '图片（已识别出内容）' : (p.title || '（无标题）');
+      parts.push('[链接' + (i + 1) + '] ' + kind + '\n' + (p.finalUrl || p.url) + '\n' + p.text +
         (p.truncated ? '\n…（页面过长，已截断）' : ''));
     });
     parts.push('以上是网页的**真实内容**，可以直接依据它回答。引用时说明是第几个链接；'
@@ -265,7 +330,7 @@ function linkContext(res) {
 }
 
 module.exports = {
-  MAX_LINKS, MAX_CHARS, TIMEOUT_MS, MAX_REDIRECTS,
-  extractUrls, isPrivateHost, checkHost, resolvesPrivate, decodeEntities, htmlToText,
+  MAX_LINKS, MAX_CHARS, TIMEOUT_MS, MAX_REDIRECTS, MAX_IMAGE_BYTES,
+  extractUrls, sniffImage, isPrivateHost, checkHost, resolvesPrivate, decodeEntities, htmlToText,
   fetchOne, readLinks, linkContext,
 };

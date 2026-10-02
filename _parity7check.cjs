@@ -80,7 +80,7 @@ function unlockAt(growth) {
   return pet.unlockedFeatures(SID, 'u1');
 }
 const u0 = unlockAt(0);
-ok('0 点解锁 5 项（含看板，批次10 从阶段5提到阶段1）', u0.unlocked.length === 5, u0.unlocked);
+ok('0 点解锁 6 项（含看板与家长视角，均从早期阶段提到阶段1）', u0.unlocked.length === 6, u0.unlocked);
 ok('0 点不含 skills', u0.unlocked.indexOf('skills') < 0, u0.unlocked);
 ok('0 点 next 指向幼苗', u0.next && u0.next.name === '幼苗', u0.next);
 ok('0 点 next 还差 30', u0.next && u0.next.toNext === 30, u0.next);
@@ -125,13 +125,13 @@ ok('超额成长值（9999）不会让解锁集出错', seq[seq.length - 1].leng
 group('E. 成长值不跨空间');
 D.run('UPDATE pets SET growth = 400 WHERE space_id = ?', SID);
 const other = pet.unlockedFeatures(SID2, 'u1');
-ok('隔壁空间仍是 5 项（含看板，没被带飞）', other.unlocked.length === 5, other.unlocked);
+ok('隔壁空间仍是 6 项（含看板，没被带飞）', other.unlocked.length === 6, other.unlocked);
 ok('隔壁空间 stage 仍是 1', other.stage === 1, other.stage);
 
 // ---------- F. 同空间不同用户互不影响 ----------
 group('F. 同空间内不同用户各长各的');
 const otherUser = pet.unlockedFeatures(SID, 'u2');
-ok('另一个用户从 0 开始（5 项含看板）', otherUser.unlocked.length === 5, otherUser.unlocked);
+ok('另一个用户从 0 开始（6 项含看板）', otherUser.unlocked.length === 6, otherUser.unlocked);
 
 // ---------- G. 前端结构：左栏以项目为主轴 ----------
 group('G. 左栏是项目树，不是对话列表');

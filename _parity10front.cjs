@@ -42,8 +42,26 @@ const APPJS = fs.readFileSync(path.join(ROOT, 'public', 'js', 'app.js'), 'utf8')
 group('A. 看板视图只有一个滚动容器');
 
 const dashViewStart = HTML.indexOf('id="view-dash"');
-const dashViewEnd = HTML.indexOf('id="view-skills"');
-ok('看板分区存在', dashViewStart > 0 && dashViewEnd > dashViewStart);
+// ★ 区块的**右边界必须是"这个视图自己结束的地方"**，不能是"下一个视图的开始"。
+//   原来写的是 HTML.indexOf('id="view-skills"') —— 批次20 把 view-parent 插在
+//   view-dash 与 view-skills 之间，家长视角自己的 .card-list 就被算进了 dashBlock，
+//   于是「看板只有 1 个 .card-list」变成 2 而误报。
+//   （判据本身没错，错的是"我用一个会移动的锚点去划边界"。）
+//   这里改成取 view-dash 那个 div 的**闭合位置**：找它后面第一个 `</div>` 之前的
+//   下一个 kb-sub 起点，兜底用 view-skills。更稳的写法是按 .kb-sub 逐个切分。
+const kbSubStarts = [];
+{
+  const re = /<div class="kb-sub" id="([a-z-]+)"/g;
+  let m;
+  while ((m = re.exec(HTML))) kbSubStarts.push({ id: m[1], at: m.index });
+}
+const dashIdx = kbSubStarts.findIndex(x => x.id === 'view-dash');
+ok('能在 HTML 里切出 kb-sub 区块序列', dashIdx >= 0 && kbSubStarts.length >= 2,
+  kbSubStarts.map(x => x.id));
+// 右边界 = 紧邻的下一个 kb-sub（不论它叫什么），而不是写死 view-skills
+const dashViewEnd = (dashIdx >= 0 && kbSubStarts[dashIdx + 1]) ? kbSubStarts[dashIdx + 1].at : HTML.length;
+ok('看板分区存在', dashViewStart > 0 && dashViewEnd > dashViewStart,
+  { start: dashViewStart, end: dashViewEnd });
 const dashBlock = HTML.slice(dashViewStart, dashViewEnd);
 
 const cardListCount = (dashBlock.match(/class="card-list"/g) || []).length;
@@ -64,15 +82,33 @@ ok('反证前提：.kb-sub 是 flex-direction: column 的容器',
 // ---------- B. loadDash 的容器编排 ----------
 group('B. loadDash：先造容器，再拉数据');
 
-const iCreate = APPJS.indexOf("'<div id=\"dailyBox\"></div>'");
+// ★ 判据改成"找 id 的声明"而不是"匹配一整段字面量"。
+//   原来写的是 APPJS.indexOf('\'<div id="dailyBox"></div>\'') ——
+//   批次17 给同一个 innerHTML 前面加了 '<div id="weeklyBox"></div>'，
+//   整段字面量就不再相等，于是一条**其实仍然成立**的约束变成了红的。
+//   （这正是"判据写死字面量"的老毛病：结构一扩就假红。）
+//   现在只问"这个 id 有没有被现造"，顺序判据单独用 indexOf 的相对位置来守。
+const iCreate = APPJS.indexOf('id="dailyBox"');
 const iPanels = APPJS.indexOf("'<div id=\"dashPanels\">");
 const iCallDaily = APPJS.indexOf("loadDaily(dailyDate || '')");
 const iGetPanels = APPJS.indexOf("const panels = $('#dashPanels')");
 
+// 周报容器（批次16/17）也必须是现造的，且同样要早于它的取数调用
+const iCreateWeekly = APPJS.indexOf('id="weeklyBox"');
+// ★ 必须找**调用点** `loadWeekly()`，不能找函数名 `loadWeekly(` ——
+//   函数定义（async function loadWeekly(range) {...}）出现在 loadDash 之前，
+//   用 indexOf('loadWeekly(') 会命中定义处，于是这条断言测的是"定义在哪儿"而不是"谁先执行"。
+//   第一版就是这么写的，直接假红（iCall=113803 < iCreate=121612）。
+//   判据选错，测的就是别的东西。
+const iCallWeekly = APPJS.indexOf('loadWeekly();');
+
 ok('★ loadDash 里现造 #dailyBox', iCreate > 0, iCreate);
+ok('★ loadDash 里现造 #weeklyBox（批次16）', iCreateWeekly > 0, iCreateWeekly);
 ok('★ loadDash 里现造 #dashPanels（看板内容的落点）', iPanels > 0, iPanels);
 ok('★ 建容器的语句在 loadDaily(...) 之前（否则 $(\'#dailyBox\') 是 null，日报静默不渲染）',
   iCreate > 0 && iCallDaily > iCreate, { iCreate, iCallDaily });
+ok('★ 建容器的语句在 loadWeekly() 调用之前（同一条约束，周报一样会静默不渲染）',
+  iCreateWeekly > 0 && iCallWeekly > iCreateWeekly, { iCreateWeekly, iCallWeekly });
 ok('★ 建容器在取 #dashPanels 之前', iGetPanels > iPanels, { iPanels, iGetPanels });
 
 // 看板内容必须写进 #dashPanels，不能写回 #dashBody（那会把 #dailyBox 一起冲掉）
