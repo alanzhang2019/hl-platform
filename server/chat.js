@@ -222,6 +222,51 @@ function searchConfig() { return search.searchConfig(); }
  */
 async function webSearch(query, opts) { return search.search(query, opts); }
 
+/**
+ * 联网搜索的第一步不是搜，是决定「要不要搜、拿什么搜」。
+ *
+ * ★ 为什么必须有这一步（真机踩出来的）：
+ *   以前直接把学生整条消息当搜索词（`webSearch(opt.text)`）。
+ *   数学辅导场景里消息大都是「格子只能从上边和左边来，那到达的数怎么算？」
+ *   这类推理对话——整句丢进搜索引擎，搜回的全是字面沾边的垃圾页，
+ *   前端再渲染成一排「新词搜索」链接，联网功能反而成了干扰。
+ *
+ *   现在先让模型做一次极快的意图判断 + 检索词提炼（非流式、几十个 token）：
+ *     need=false → 这条消息根本不需要联网（数学推理/解题引导/追问确认/写作闲聊），
+ *                  一条搜索请求都不发，前端也不显示任何"联网"字样；
+ *     need=true  → 用提炼出的短检索词去搜（去掉"上边/这个"这类口语代词，
+ *                  保留有区分度的实体与术语）。
+ *   判断口径从严：拿不准就不联网——给学生塞一排无关网页，比不联网糟糕得多。
+ *   规划本身挂掉时退回旧行为（整句当查询）——宁可搜得笨，不能让联网静默失效。
+ */
+async function planWebSearch(text, opts) {
+  const o = opts || {};
+  const raw = String(text || '').trim();
+  if (!raw) return { need: false, reason: 'EMPTY' };
+  if (llm.isMock()) return { need: false, reason: 'MOCK' };
+  const history = (Array.isArray(o.history) ? o.history : [])
+    .slice(-4)
+    .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '').slice(0, 500) }))
+    .filter(m => m.content);
+  const sys =
+    '你是联网搜索的调度器。根据最近几轮对话，判断：要回答学生的最新一条消息，是否需要搜索互联网上的外部信息。\n' +
+    '需要联网的例子：新闻时事、人物/公司/政策等事实、比赛或招生的报名信息、天气、价格、软件版本、百科知识、模型不掌握的最新资料。\n' +
+    '不需要联网的例子：数学/物理等推理与解题引导、对上一条回复的追问与确认、写作与翻译、闲聊、概念理解核对——这些模型自己就会，搜了只会带回无关网页。\n' +
+    '判断口径从严：拿不准就判不联网。\n' +
+    '只输出 JSON：{"need":true或false,"query":"检索词"}。need=true 时 query 必须是 4~16 个字的搜索关键词组，' +
+    '去掉口语和指示代词（如"上边""这个""那你想看一下"），保留有区分度的实体、术语与题目关键词；need=false 时 query 为空字符串。';
+  const msgs = [{ role: 'system', content: sys }].concat(history, [{ role: 'user', content: raw }]);
+  try {
+    const plan = await llm.completeJSON({ messages: msgs, model: o.model || 'default', temperature: 0.1 });
+    const need = !!(plan && plan.need);
+    let query = need ? String((plan && plan.query) || '').trim() : '';
+    if (need && !query) query = raw;   // 说要搜却没给词 → 退回整句
+    return { need: need, query: query, reason: need ? 'PLAN' : 'PLAN_OFF' };
+  } catch (e) {
+    return { need: true, query: raw, reason: 'FALLBACK', error: String((e && e.message) || e) };
+  }
+}
+
 /** 把搜索结果拼成给模型的一段上下文（实现在 search.js，保持单一出处） */
 function searchContext(hits) { return search.searchContext(hits); }
 
@@ -1301,8 +1346,8 @@ module.exports = {
   TTS_MAX_CHARS, speak, getTtsPref, setTtsPref, clampRate,
   // 翻译
   DIRECTIONS, detectDirection, translateMessage,
-  // 搜索
-  webSearch, searchContext, searchConfig,
+  // 搜索（planWebSearch = 搜之前的意图判断与检索词提炼，见函数注释）
+  webSearch, planWebSearch, searchContext, searchConfig,
   // 读链接（学生直接甩 URL 过来时真的去看那个页面；图片直链交给视觉模型看成文字）
   extractUrls: webdoc.extractUrls, readLinks, linkContext: webdoc.linkContext,
   // 学生上传的图片 → 文字（旧行为只会告诉模型"你看不到图片"，那是产品硬伤）
