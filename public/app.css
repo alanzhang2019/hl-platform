@@ -648,6 +648,12 @@ button { cursor: pointer; }
   background: var(--panel); color: var(--dim); font-size: .84rem; cursor: pointer;
 }
 .adm-tab.on { background: var(--pri-soft); color: var(--pri); border-color: var(--pri); font-weight: 600; }
+/* 能力档位下拉（批次25）。放在空间行右侧，窄屏会自动换到下一行。 */
+.adm-tier {
+  flex: 0 0 auto; font: inherit; font-size: .78rem;
+  padding: .3em .5em; border-radius: 8px; border: 1px solid var(--line-2);
+  background: var(--panel); color: var(--fg); cursor: pointer;
+}
 
 .adm-user {
   display: block; margin-bottom: 10px; align-items: unset;
@@ -764,6 +770,130 @@ button { cursor: pointer; }
 .w-kpi span { font-size: .72rem; color: var(--dim); line-height: 1.3; }
 .w-kpi .w-why { display: block; font-style: normal; font-size: .64rem; color: var(--dim2); line-height: 1.35; margin-top: 3px; }
 .w-kpi .w-sub { display: block; font-style: normal; font-size: .66rem; color: var(--dim2); margin-top: 3px; }
+
+/* ---- 数字溯源（批次22 前端接线）----
+   基调：让"能点的数字"看起来**像数字本身可点**，而不是旁边多挂一个按钮。
+   点击后明细展开在 .w-grid 下方（#weeklyEv），而不是浮层 —— 浮层在窄屏会盖住数字本身。
+   ★ 布局要点：按钮是 inline，下划线只画在**数字那一行**，不画到「明细」上。
+     若把 <u>明细</u> 也纳入下划线范围，它会跟数字挤在一行里（实测：数字和「明细」重叠）。 */
+.w-kpi b .w-ev-btn {
+  display: inline-block; padding: 0; border: none; background: none; cursor: pointer;
+  font: inherit; color: inherit; line-height: inherit; font-weight: inherit;
+  text-align: center;
+}
+.w-kpi b .w-ev-btn .w-ev-v {
+  display: block; border-bottom: 1px dashed currentColor;  /* 虚线 = "这里可以再往下看一层" */
+}
+.w-kpi b .w-ev-btn:hover { color: var(--pri); }
+.w-kpi b .w-ev-i {
+  display: block; margin-top: 2px; font-size: .6rem; font-weight: 500;
+  color: var(--dim2); text-decoration: none; letter-spacing: .04em; border-bottom: none;
+}
+.w-kpi b .w-ev-btn:hover .w-ev-i { color: var(--pri); }
+
+.w-ev-sec { margin-top: 10px; }
+/* 空容器在没内容时不占位：#weeklyEv 是全页常驻节点，
+   不去掉它的 margin/padding 会在数字和「这几天」之间多出一块空白。 */
+.w-ev-sec:empty { display: none; }
+.w-ev-sec[data-open="0"] { display: none; }
+.w-ev-hint { margin: 6px 0 0; font-size: .68rem; }
+.w-ev-h {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 8px;
+}
+.w-ev-h b { font-size: .8rem; color: var(--txt); }
+.w-ev-range { font-size: .68rem; color: var(--dim2); font-family: var(--mono); }
+.w-ev-x {
+  margin-left: auto; flex: none; width: 22px; height: 22px; padding: 0;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+  color: var(--dim); font-size: .9rem; line-height: 1; cursor: pointer;
+}
+.w-ev-x:hover { border-color: var(--pri); color: var(--pri); }
+.w-ev-list { max-height: 260px; overflow-y: auto; }
+.w-ev-g { margin-bottom: 10px; }
+.w-ev-g i { display: block; font-style: normal; font-size: .66rem; color: var(--dim2); margin-bottom: 4px; font-family: var(--mono); }
+.w-ev-r { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.w-ev-r:last-child { border-bottom: none; }
+.w-ev-t { flex: 1; min-width: 0; font-size: .78rem; color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.w-ev-m { flex: none; font-size: .68rem; color: var(--dim2); font-family: var(--mono); white-space: nowrap; }
+.w-ev-none { font-size: .78rem; color: var(--dim); line-height: 1.6; }
+.w-ev-more { margin: 6px 0 0; font-size: .68rem; color: var(--dim2); }
+
+/* ---- 与上一段对比（批次22-②）----
+   ★★ 刻意**不用红绿**（这是本项目一条明确的产品主张）：
+     记录多不等于学得好，用红/绿等于把"多"判成"好"。
+     所以 up / down 用同一族的**中性强调色**，只在形态上区分（↑↓ 不画，改文字"多/少"）。
+   ★ "没法比"必须是独立的一档样式：它既不是"一样"也不是"0"，不能混进 flat。 */
+.w-cmp-row {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 6px 0; border-bottom: 1px solid var(--line);
+}
+.w-cmp-row:last-of-type { border-bottom: none; }
+.w-cmp-n { flex: none; width: 6.4em; font-size: .78rem; color: var(--txt); }
+.w-cmp-v { flex: none; min-width: 3.4em; font-size: .86rem; font-weight: 700; color: var(--txt); font-family: var(--mono); }
+.w-cmp-l { flex: 1; min-width: 0; font-size: .7rem; color: var(--dim2); font-family: var(--mono); }
+.w-cmp-row em { flex: none; font-style: normal; font-size: .7rem; white-space: nowrap; }
+/* up / down 同色 —— 只表达"变多了 / 变少了"，不表达"好 / 坏" */
+.w-cmp-up, .w-cmp-down { color: var(--pri); font-family: var(--mono); }
+.w-cmp-flat { color: var(--dim2); }
+.w-cmp-na { color: var(--dim2); }   /* 「没法比」与「一样」视觉上须区分：na 更淡且带说明 */
+
+/* ---- 7 阶段成长画像（批次22-③）----
+   ★ 设计基调：这是一张"形状图"，不是成绩单。
+     所以全页**不出现分数、百分比大字、排名**；雷达只表达"哪块凹下去"，
+     维度用文字说清"这个数是从哪来的"。
+   ★ 算不出来的维度：整块降低对比 + 明确写「还看不出来」，绝不显示 0%。 */
+.g-wrap {
+  margin-bottom: 12px; padding: 12px 14px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+}
+.g-err { font-size: .82rem; color: var(--dim); padding: 6px 0; }
+.g-head h4 { margin: 0 0 6px; font-size: .86rem; font-weight: 600; color: var(--txt); }
+.g-head h4 span { font-weight: 400; font-size: .7rem; color: var(--dim2); margin-left: 6px; }
+.g-next { margin: 0 0 10px; font-size: .78rem; color: var(--dim); line-height: 1.65; }
+.g-next b { color: var(--pri); }
+
+/* 雷达 + 维度列表：窄屏竖排，宽屏左右并排 */
+.g-body { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.g-radar { flex: none; width: 300px; max-width: 100%; height: auto; }
+.g-dims { flex: 1; min-width: 200px; }
+.g-dim { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.g-dim:last-child { border-bottom: none; }
+.g-dim-h { display: flex; align-items: baseline; gap: 8px; }
+.g-dim-h b { flex: 1; font-size: .78rem; color: var(--txt); }
+.g-dim-v { flex: none; font-size: .84rem; font-weight: 700; color: var(--pri); font-family: var(--mono); }
+.g-dim-v i { font-style: normal; font-size: .62rem; font-weight: 400; color: var(--dim2); margin-left: 1px; }
+/* 「还看不出来」与「0%」必须是两种样子 —— 这就是规矩②在图上的体现 */
+.g-na {
+  flex: none; font-style: normal; font-size: .66rem; color: var(--dim2);
+  padding: 1px 6px; border: 1px dashed var(--line-2); border-radius: 999px;
+}
+.g-dim.na b { color: var(--dim); }
+.g-dim p { margin: 3px 0 0; font-size: .68rem; color: var(--dim2); line-height: 1.5; }
+
+/* 阶梯：走到 = 实心，当前下一步 = 描边高亮，没到 = 灰空心。
+   ★ 不用"等级名"、不给星星，只标"已走到"。 */
+.g-lad-h { margin: 14px 0 8px; font-size: .82rem; font-weight: 600; color: var(--txt); }
+.g-ladder { display: flex; flex-direction: column; gap: 2px; }
+.g-step { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.g-step:last-child { border-bottom: none; }
+.g-dot {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-style: normal; font-size: .68rem; font-family: var(--mono);
+  background: var(--panel); border: 1px solid var(--line-2); color: var(--dim2);
+}
+.g-step.on .g-dot { background: var(--pri); border-color: var(--pri); color: #fff; font-weight: 700; }
+.g-step.next .g-dot { border-color: var(--pri); color: var(--pri); border-width: 2px; }
+.g-step-b { flex: 1; min-width: 0; }
+.g-step-b b { display: block; font-size: .8rem; color: var(--txt); }
+.g-step.on .g-step-b b { color: var(--pri); }
+.g-ok {
+  font-size: .62rem; font-weight: 500; color: var(--pri); margin-left: 6px;
+  padding: 1px 5px; border: 1px solid var(--pri); border-radius: 999px;
+}
+.g-desc { display: block; font-size: .68rem; color: var(--dim); margin-top: 1px; }
+.g-step-b p { margin: 2px 0 0; font-size: .68rem; color: var(--dim2); line-height: 1.5; }
 
 /* 分区小节 */
 .w-sec { margin-top: 16px; }
@@ -1052,9 +1182,43 @@ button { cursor: pointer; }
 .skill-c:active { transform: translateY(1px); }
 .skill-c.on { border-color: var(--pri); background: var(--pri-soft); }
 .skill-c .sc-top { display: flex; align-items: center; gap: 8px; }
-.skill-c .sc-n { font-weight: 600; font-size: .92rem; flex: 1; }
+.skill-c .sc-n { font-weight: 600; font-size: .92rem; flex: 1; min-width: 0; }
 .skill-c .sc-d { font-size: .8rem; color: var(--dim); line-height: 1.6; }
 .skill-c .sc-b { font-size: .7rem; color: var(--dim2); display: flex; gap: 8px; align-items: center; }
+/* 技能图标（batch25）：57 条技能各一个手写原生 SVG。
+   描边用 currentColor ⇒ 深浅主题、hover、选中态自动跟随，不写死颜色。
+   尺寸固定在标题行里，不随字号放大缩小，保证 57 个形状观感一致。 */
+.skill-c .sc-ico { flex: 0 0 22px; width: 22px; height: 22px; color: var(--dim); display: flex; align-items: center; justify-content: center; }
+.skill-c:hover .sc-ico { color: var(--fg); }
+.skill-c.on .sc-ico { color: var(--pri); }
+.ski { width: 22px; height: 22px; display: block; }
+/* 「用它开一段对话」：卡片内的次级动作。不做成实心主按钮 ——
+   卡片整体点一下是"开关技能"，这个按钮是"换个方式用它"，两者权重必须分开。 */
+.skill-c .sc-go {
+  margin-top: 4px; align-self: flex-start;
+  font: inherit; font-size: .74rem; color: var(--pri);
+  background: none; border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 3px 10px; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.skill-c .sc-go:hover { border-color: var(--pri); background: var(--pri-soft); }
+.skill-c .sc-go:active { transform: translateY(1px); }
+/* 档位锁定态（批次25）：沿用批次7「灰色锁定态」的约定 —— 可见但点不动。
+   不做 display:none —— 学生看不到"还有这些方法"就不知道自己是缺东西还是没这东西。 */
+.skill-c.locked { opacity: .55; cursor: not-allowed; background: var(--panel-2); }
+.skill-c.locked:hover { border-color: var(--line); }
+.skill-c.locked:active { transform: none; }
+.skill-c .sc-lock { flex: 0 0 auto; font-size: .8rem; line-height: 1; opacity: .8; }
+.skill-c .sc-tier { color: var(--dim2); border: 1px solid var(--line-2); border-radius: 999px; padding: 0 6px; }
+/* 档位说明条 */
+.tier-note {
+  display: flex; align-items: flex-start; gap: 8px;
+  background: var(--panel-3); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 9px 12px; font-size: .78rem; color: var(--dim); line-height: 1.65;
+}
+.tier-note .tn-ico { flex: 0 0 auto; line-height: 1.5; }
+.tier-note .tn-txt { min-width: 0; }
+.tier-note b { color: var(--fg); font-weight: 600; }
+.tier-note .dim { color: var(--dim2); }
 .tgl { width: 34px; height: 20px; border-radius: 12px; background: var(--panel-3); position: relative; flex: 0 0 34px; transition: background .18s; }
 .tgl::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--panel); box-shadow: var(--shadow); transition: transform .18s; }
 .skill-c.on .tgl { background: var(--pri); }
@@ -1203,6 +1367,89 @@ button { cursor: pointer; }
 .me-mi span { font-size: .76rem; color: var(--dim2); }
 .me-mi.danger b { color: var(--bad); }
 
+/* ================= 英语 · 单元四关 + 艾宾浩斯（批次24）=================
+   ★ 基准样式一律写在所有 @media 之前：同权重后写的赢，
+     要是把 .en4-bar.na 这类基准规则写在 @media 后面，会被媒体查询里的规则直接盖掉且零报错。 */
+.en4-wrap { padding: 4px 18px 8px; flex: 0 0 auto; }
+.en4-err { padding: 12px; color: var(--bad); font-size: .84rem; }
+.en4-empty { border: 1px dashed var(--line-2); border-radius: var(--r); padding: 14px 16px; font-size: .86rem; color: var(--dim); }
+.en4-empty b { color: var(--txt); }
+.en4-empty-s { margin-top: 6px; font-size: .78rem; color: var(--dim2); line-height: 1.7; }
+
+.en4-unit { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); padding: 10px 12px; margin-bottom: 9px; }
+.en4-unit.done { border-color: var(--ok); }
+.en4-u-h { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; flex-wrap: wrap; }
+.en4-u-h b { font-size: .92rem; }
+.en4-u-n { font-size: .74rem; color: var(--dim2); white-space: nowrap; }
+.en4-u-ok { font-size: .72rem; color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
+
+.en4-gates { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.en4-gates-all { margin-top: 10px; }
+.en4-gate {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+  padding: 9px 10px; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--panel-2); color: var(--txt); cursor: pointer; text-align: left;
+  transition: border-color .15s, transform .08s;
+}
+.en4-gate:hover { border-color: var(--pri); }
+.en4-gate:active { transform: translateY(1px); }
+.en4-ic { font-size: .9rem; font-weight: 700; color: var(--pri); line-height: 1; }
+.en4-nm { font-size: .8rem; font-weight: 600; white-space: nowrap; }
+.en4-bar { width: 100%; height: 5px; border-radius: 999px; background: var(--panel-3); overflow: hidden; }
+.en4-bar i { display: block; height: 100%; background: var(--pri); border-radius: 999px; transition: width .25s; }
+/* ★ null（没有分母）与 0（一个都没过）必须长得不一样 */
+.en4-bar.na { background: transparent; border: 1px dashed var(--line-2); }
+.en4-pct { font-family: var(--mono); font-size: .72rem; color: var(--dim); }
+.en4-pct.na { color: var(--dim2); font-family: inherit; font-size: .72rem; }
+.en4-cnt { font-family: var(--mono); font-size: .68rem; color: var(--dim2); }
+
+/* 复习队列 */
+.en4-review { padding: 0 18px 6px; flex: 0 0 auto; }
+.en4-rv { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); padding: 10px 12px; }
+.en4-rv-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 7px; flex-wrap: wrap; }
+.en4-rv-h b { font-size: .9rem; }
+.en4-rv-n { font-size: .72rem; color: var(--dim2); }
+.en4-rv-s { display: flex; gap: 14px; flex-wrap: wrap; font-size: .78rem; color: var(--dim); }
+.en4-rv-s b { font-family: var(--mono); font-size: .92rem; color: var(--txt); }
+.en4-na { color: var(--dim2); font-style: normal; }
+.en4-rv-tip { margin-top: 6px; font-size: .74rem; color: var(--dim2); line-height: 1.6; }
+.en4-rv-a { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.en4-rv-d { font-size: .74rem; color: var(--dim2); font-family: var(--mono); }
+
+/* 答题 */
+.en4-wrap-q { max-height: 60vh; overflow: auto; }
+.en4-q { border: 1px solid var(--line); border-radius: var(--r-sm); padding: .75em .85em; margin-bottom: 8px; background: var(--panel); }
+.en4-q-h { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; flex-wrap: wrap; }
+.en4-q-n { font-family: var(--mono); font-size: .74rem; color: var(--dim2); }
+.en4-q-w { font-size: 1rem; font-weight: 600; }
+.en4-q-p { font-size: .8rem; color: var(--dim); }
+.en4-q-l { font-family: var(--mono); font-size: .74rem; color: var(--dim2); letter-spacing: .16em; }
+.en4-q-m { font-size: .82rem; color: var(--dim); margin-bottom: 7px; }
+.en4-start { font-size: .74rem; color: var(--dim2); margin: 2px 0 7px; }
+.en4-start code { background: var(--panel-3); border-radius: 4px; padding: 1px 5px; margin-right: 5px; font-size: .72rem; }
+.en4-ch { display: flex; flex-wrap: wrap; gap: 7px; }
+.en4-ch-i { border: 1px solid var(--line-2); background: var(--panel-2); color: var(--txt); border-radius: var(--r-sm); padding: 5px 12px; font-size: .84rem; cursor: pointer; }
+.en4-ch-i:hover { border-color: var(--pri); }
+.en4-ch-i.on { border-color: var(--pri); background: var(--pri-soft); }
+.en4-ch-i.ok { border-color: var(--ok); background: var(--ok-soft); }
+.en4-ch-i.bad { border-color: var(--bad); background: var(--bad-soft); text-decoration: line-through; }
+.en4-q.ok { border-color: var(--ok); background: var(--ok-soft); }
+.en4-q.bad { border-color: var(--bad); background: var(--bad-soft); }
+.en4-q.used { border-color: var(--pri); }
+.en4-q.noused { border-color: var(--line-2); }
+/* ★ 造句的 unknown（想不起来）用中性色，不用红 —— 它不是错 */
+.en4-q.unk { border-color: var(--line-2); background: var(--panel-2); }
+.en4-fb { font-size: .82rem; margin-top: 6px; line-height: 1.6; }
+.en4-fb.ok { color: var(--ok); }
+.en4-fb.bad { color: var(--bad); }
+.en4-fb.mid { color: var(--dim); }
+.en4-fb-x { color: var(--dim); margin-top: 3px; }
+.en4-sum { display: flex; gap: 14px; align-items: baseline; padding: .6em 0 .5em; }
+.en4-sum b { font-size: 1.5rem; font-family: var(--mono); }
+.en4-rv-od { font-size: .7rem; color: var(--bad); border: 1px solid var(--bad); border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+.en4-rv-c { font-size: .7rem; color: var(--dim2); font-family: var(--mono); white-space: nowrap; }
+.en4-rv-q .inp { margin-bottom: 6px; }
+
 /* ================= 顶栏响应式 =================
  * 窗口不够宽时让顶栏**换行**，而不是把标题压成竖排。
  * 单开 900px 而不是并进侧栏的 820px —— 侧栏停靠时（>820）主区反而更窄，
@@ -1263,6 +1510,17 @@ button { cursor: pointer; }
   .stream { padding: 16px 12px 4px; }
   .composer { padding: 10px 12px 12px; }
   .card-stats, .card-bar, .card-list { padding-left: 12px; padding-right: 12px; }
+  /* 四关在窄屏改两列：四列会把「认得出」这类中文标签挤成竖排 */
+  .en4-wrap, .en4-review { padding-left: 12px; padding-right: 12px; }
+  .en4-gates { grid-template-columns: repeat(2, 1fr); }
+  /* ★ 单词行必须换行：一行里塞了 词(96) + 音标(84) + 意思 + 计数 + 两个按钮 + 删，
+     390px 宽下放不下 —— 实测 speak-btn 与删除按钮被推出右边界。
+     换行后第一行给词/音标/意思，第二行放计数与按钮。 */
+  .en-i { flex-wrap: wrap; row-gap: 6px; gap: 8px; }
+  .en-i .en-w { min-width: 0; }
+  .en-i .en-p { min-width: 0; }
+  .en-i .en-m { flex: 1 1 100%; order: 3; }
+  .en-i .en-n { order: 4; }
   .msg.user .body { max-width: 92%; }
   .land-card { padding: 24px 20px 18px; }
   /* 落地页抬头：手机上压缩，别让"我们是谁"把表单顶出首屏 */
@@ -1343,7 +1601,6 @@ button { cursor: pointer; }
 .dict-score b { font-size: 1.6rem; font-family: var(--mono); }
 .speak-btn { border: 1px solid var(--line-2); background: var(--panel-2); color: var(--txt); border-radius: 999px; width: 30px; height: 30px; cursor: pointer; font-size: .9rem; line-height: 1; flex: 0 0 30px; }
 .speak-btn:hover { border-color: var(--pri); color: var(--pri); }
-
 /* ================= 测评（P6）================= */
 .ex-i { display: flex; align-items: center; gap: 12px; padding: .7em .85em; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); margin-bottom: 8px; }
 .ex-i > div:first-child { flex: 1; min-width: 0; }

@@ -37,6 +37,8 @@
     stats: null,
     skills: [],
     skillEnabled: [],
+    skillTier: null,      // 本空间档位（批次25）
+    skillTiers: [],       // 档位阶梯（后端给的中文名与顺序）
     kbCats: [],
     kbDocs: [],
     kbUncat: 0,
@@ -558,19 +560,30 @@
     if (!r.ok) { toast(r.message || '管理密码不正确'); return; }
     adminToken = r.token;
 
-    let list = { spaces: [] }, users = { users: [] };
+    let list = { spaces: [] }, users = { users: [] }, tiers = { tiers: [], spaces: [] };
     try {
-      [list, users] = await Promise.all([
+      [list, users, tiers] = await Promise.all([
         adminApi('/api/admin/spaces').then(x => x.json()),
         adminApi('/api/admin/users').then(x => x.json()),
+        adminApi('/api/admin/skill-tiers').then(x => x.json()),
       ]);
     } catch (e) { toast('读取管理数据失败'); return; }
+
+    // 能力档位：空间 → 档位 的映射（批次25）。管理端给某个空间定档，
+    // 学生侧「能力」分区只显示 ≤ 该档位的方法。**不是付费等级，是授权。**
+    const tierMap = {};
+    (tiers.spaces || []).forEach(s => { tierMap[s.id] = s.tier; });
+    const TIERS = tiers.tiers || [];
+    const tierOpts = (cur) => TIERS.map(t =>
+      '<option value="' + t.key + '"' + (t.key === cur ? ' selected' : '') + '>' + HL.esc(t.name) + '</option>').join('');
 
     const spRows = (list.spaces || []).map(s =>
       '<div class="row-card" style="margin-bottom:8px"><div><b>' + HL.esc(s.name) + '</b>' +
       (s.dupName ? ' <span class="chip almost">重名</span>' : '') +
       '<div class="dim">ID：' + HL.esc(s.spaceId) + ' · 对话 ' + s.conversations + ' · 知识卡 ' + s.cards +
-      ' · ' + (s.hasPasscode ? '有口令' : '无口令') + '</div></div></div>').join('');
+      ' · ' + (s.hasPasscode ? '有口令' : '无口令') + '</div></div>' +
+      '<select class="adm-tier" data-space="' + HL.esc(s.spaceId) + '" data-prev="' + HL.esc(tierMap[s.spaceId] || 'self') + '" title="能力档位">' +
+      tierOpts(tierMap[s.spaceId] || 'self') + '</select></div>').join('');
 
     openModal('管理后台', [
       '<div class="adm-tabs">' +
@@ -581,11 +594,30 @@
       '<div id="admSpaces" hidden>' + (spRows || '<p class="dim">还没有空间</p>') + '</div>',
       '<p class="dim" style="margin-top:10px">停用会立刻让他下线并无法登录；这里不提供删号 —— ' +
       '学生的对话与错题是家长的资产，删掉不可逆。</p>',
+      '<p class="dim" style="margin-top:6px">右边的下拉是**能力档位**：' +
+      TIERS.map(t => HL.esc(t.name) + '（' + HL.esc(t.note) + '）').join(' · ') +
+      '。改变后该空间立刻生效，已启用的越档能力会同时失效。</p>',
     ].join(''));
   }
 
   // 管理后台的事件委托：面板内容是动态重排的，逐个绑会在重绘后失效
   function initAdminPanel() {
+    // 改能力档位（批次25）：用 change 而不是 click（select 的语义事件）
+    document.addEventListener('change', async (e) => {
+      const sel = e.target && e.target.closest ? e.target.closest('.adm-tier') : null;
+      if (!sel) return;
+      const sid = sel.dataset.space, tier = sel.value;
+      const prev = sel.getAttribute('data-prev') || '';
+      try {
+        const r = await adminApi('/api/admin/spaces/' + encodeURIComponent(sid) + '/tier', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tier: tier }),
+        }).then(x => x.json());
+        if (r.error) { toast(r.message || '改档失败'); if (prev) sel.value = prev; return; }
+        sel.setAttribute('data-prev', tier);
+        const nm = (r.tiers || []).filter(t => t.key === tier)[0];
+        toast('已把该空间的能力档位改为「' + (nm ? nm.name : tier) + '」');
+      } catch (err) { toast('改档失败'); if (prev) sel.value = prev; }
+    });
     document.addEventListener('click', async (e) => {
       const tab = e.target && e.target.closest ? e.target.closest('.adm-tab') : null;
       if (tab) {
@@ -1668,9 +1700,15 @@
     // 从项目视图「新建对话」进来：记住项目，第一条消息创建对话时归入该项目
     S.pendingProjectId = (opts && opts.projectId) || null;
     S.convId = '';
-    S.agentId = ''; S.webSearch = false; S.pending = []; S.tempDocs = [];
+    // keepAgent：从能力中心「用它开一段对话」进来时保留刚选好的技能身份。
+    // 其余入口一律清空 —— 新对话默认不背上一段的智能体。
+    const keepAgent = !!(opts && opts.keepAgent);
+    if (!keepAgent) S.agentId = '';
+    S.webSearch = false; S.pending = []; S.tempDocs = [];
     $('#convTitle').textContent = '新对话';
-    $('#convSubText').textContent = S.pendingProjectId ? '新对话 · 将归入「' + projName(S.pendingProjectId) + '」' : '问吧，我不会直接给你答案';
+    $('#convSubText').textContent = S.agentId
+      ? ('智能体：' + agentName(S.agentId))
+      : (S.pendingProjectId ? '新对话 · 将归入「' + projName(S.pendingProjectId) + '」' : '问吧，我不会直接给你答案');
     renderProjectSel(S.pendingProjectId || '');
     renderStreamEmpty();
     renderSideTree();
@@ -2807,33 +2845,168 @@
     }
     return '<b>' + HL.esc(String(v)) + (unit || '') + '</b>';
   }
+
+  /**
+   * ★ 可溯源的数字（批次22 前端接线）。
+   *
+   * 规矩：**只有算得出来的数字才给"看明细"**。
+   *   - `v === null` 时它本来就"算不出来"，给个能点的入口等于承诺"点开就知道"，
+   *     点进去只会看到空列表 —— 那是骗人。所以 null 一律走 wNum()，不给 data-wm。
+   *   - `0` 是**算得出来的 0**（真的一次都没发生），点开看到空列表是**正确**的，
+   *     所以 0 必须可点：用户点开发现"确实是 0 条"，这正是溯源要证明的事。
+   *     把 0 也禁掉，就等于把"0"和"—"又混成一件事了（规矩②）。
+   */
+  function wNumLink(v, unit, metric, label, unknownText) {
+    if (v === null || v === undefined) return wNum(v, unit, unknownText);
+    // ★ 数字包一层 span.w-ev-v：下划线（"可以点"的视觉提示）只画在数字那一行，
+    //   不能画到下面的「明细」上 —— 否则两者会挤在同一行重叠（已实测）。
+    return '<b><button class="w-ev-btn" type="button" data-wm="' + HL.esc(metric) + '" ' +
+      'title="' + HL.esc('看这 ' + v + (unit || '') + ' 是哪些记录凑出来的') + '">' +
+      '<span class="w-ev-v">' + HL.esc(String(v)) + (unit || '') + '</span>' +
+      '<u class="w-ev-i">明细</u></button></b>';
+  }
+
+  /** 明细里一条记录的显示文字：不同 metric 的 item 形状不同，集中在这里兜住 */
+  function evItemLine(it) {
+    const title = it.knowledge || it.title || it.text || it.summary || (it.cardId ? ('卡片 ' + it.cardId) : '—');
+    const bits = [];
+    if (it.subject) bits.push(it.subject);
+    if (it.result) bits.push(it.result === 'right' ? '答对' : (it.result === 'wrong' ? '答错' : '判不出对错'));
+    else if (it.kind) bits.push({ activity: '记录', review: '练习', card: '知识卡' }[it.kind] || it.kind);
+    if (it.time) bits.push(it.time);
+    return { title: String(title), meta: bits.join(' · ') };
+  }
+
+  function renderWeeklyEvidence(d) {
+    const metricName = {
+      records: '留下的记录', reviews: '练知识卡', accuracy: '判得出对错的练习',
+      right: '答对的练习', wrong: '答错的练习', cards: '碰过的知识卡', coverage: '碰过的知识卡',
+    }[d.metric] || d.metric;
+    if (!d.count) {
+      return '<div class="w-ev-h"><b>' + HL.esc(metricName) + ' · 0 条</b>' +
+        '<button class="w-ev-x" type="button" title="收起">×</button></div>' +
+        '<div class="w-ev-none">这个数确实就是 0 —— 这几天的记录里，一条都对应不上它。</div>';
+    }
+    // 按天分组：溯源的意义就是"哪几天凑出了这个数"
+    const byDay = {};
+    const order = [];
+    d.items.forEach(it => {
+      if (!byDay[it.date]) { byDay[it.date] = []; order.push(it.date); }
+      byDay[it.date].push(it);
+    });
+    const groups = order.map(date => {
+      const rows = byDay[date].map(it => {
+        const L = evItemLine(it);
+        return '<div class="w-ev-r"><span class="w-ev-t">' + HL.esc(L.title) + '</span>' +
+          (L.meta ? '<span class="w-ev-m">' + HL.esc(L.meta) + '</span>' : '') + '</div>';
+      }).join('');
+      return '<div class="w-ev-g"><i>' + HL.esc(date.replace(/^\d{4}-/, '')) + ' · ' + byDay[date].length + ' 条</i>' + rows + '</div>';
+    }).join('');
+    return '<div class="w-ev-h"><b>' + HL.esc(metricName) + ' · ' + d.count + ' 条</b>' +
+      '<span class="w-ev-range">' + HL.esc(d.from) + ' ~ ' + HL.esc(d.to) + '</span>' +
+      '<button class="w-ev-x" type="button" title="收起">×</button></div>' +
+      '<div class="w-ev-list">' + groups + '</div>' +
+      (d.truncated ? '<p class="w-ev-more">只列出前 300 条，剩下的请把日期范围收窄再看。</p>' : '');
+  }
+
+  async function loadWeeklyEvidence(metric) {
+    const box = $('#weeklyEv');
+    if (!box) return;
+    const r2 = weeklyRange || defaultWeeklyRange();
+    // ★ 状态记在 data-ev（view），动作来自 data-wm（action）—— 两个属性名不混用
+    if (box.dataset.ev === metric && box.dataset.open === '1') {
+      closeWeeklyEvidence(); return;
+    }
+    box.dataset.ev = metric; box.dataset.open = '1';
+    box.innerHTML = '<div class="skel" style="height:60px"></div>';
+    try {
+      const r = await api('/api/weekly/evidence?from=' + encodeURIComponent(r2.from) +
+        '&to=' + encodeURIComponent(r2.to) + '&metric=' + encodeURIComponent(metric));
+      box.innerHTML = renderWeeklyEvidence(r);
+    } catch (e) {
+      box.innerHTML = '<div class="w-ev-h"><b>明细打不开</b><button class="w-ev-x" type="button">×</button></div>' +
+        '<div class="w-ev-none">' + HL.esc(e.message) + '</div>';
+    }
+  }
+
+  function closeWeeklyEvidence() {
+    const box = $('#weeklyEv');
+    if (!box) return;
+    box.dataset.open = '0'; box.dataset.ev = '';
+    box.innerHTML = '';
+  }
+  /**
+   * ★ 与上一次对比（批次22-②）。
+   *
+   * 规矩：
+   *  - 任一侧算不出来（null）⇒ **明确说"没法比"**，绝不补 0 算出"从 0 涨到 50%"。
+   *  - **不给红绿箭头、不写"进步/退步"** —— 记录多不等于学得好（limits 里明说了）。
+   *    这里只摆"上一个同长窗口是多少"，让用户自己看走势。
+   */
+  function renderCompare(cmp) {
+    if (!cmp) return '';
+    const rows = [
+      ['留下的记录', 'records', '条'],
+      ['练知识卡', 'reviews', '次'],
+      ['答对的比例', 'accuracy', '%'],
+      ['碰过的知识卡', 'cardsTouched', '张'],
+    ].map(r => {
+      const m = cmp.metrics[r[1]];
+      if (!m) return '';
+      const cur = m['this'], last = m.last;
+      // 上一侧本身就没数据 ⇒ 只说"上一次没这个数"，不编 delta
+      let deltaTxt;
+      if (m.delta === null) {
+        deltaTxt = '<em class="w-cmp-na">' + HL.esc(m.why || '没法比') + '</em>';
+      } else if (m.direction === 'flat') {
+        deltaTxt = '<em class="w-cmp-flat">和上一次一样</em>';
+      } else {
+        deltaTxt = '<em class="w-cmp-' + m.direction + '">' +
+          (m.direction === 'up' ? '多 ' : '少 ') + Math.abs(m.delta) + (r[2] || '') + '</em>';
+      }
+      return '<div class="w-cmp-row">' +
+        '<span class="w-cmp-n">' + HL.esc(r[0]) + '</span>' +
+        '<span class="w-cmp-v">' + (cur === null ? '—' : cur + (r[2] || '')) + '</span>' +
+        '<span class="w-cmp-l">上一段 ' + (last === null ? '—' : last + (r[2] || '')) + '</span>' +
+        deltaTxt + '</div>';
+    }).join('');
+    return '<div class="w-sec"><h4>和上一段比 <span>' + HL.esc(cmp.prevFrom) + ' ~ ' + HL.esc(cmp.prevTo) +
+      '（同样是 ' + cmp.daysCount + ' 天）</span></h4>' +
+      (rows || '<div class="dim w-none">没有可比的两段。</div>') +
+      '<p class="w-note">' + HL.esc(cmp.note) + '</p></div>';
+  }
+
   function renderWeekly(report) {
     const s = report.summary;
     const cov = report.coverage || { totalCards: 0, bySubject: [] };
 
-    // —— ① 概览数字：每一张都能看出"算得出来 / 算不出来" ——
+    // —— ① 概览数字：每一张都能看出"算得出来 / 算不出来"，算得出来的可以点开看明细 ——
     const kpi = [
       {
-        v: s.records, l: '留下的记录', u: '条',
+        v: s.records, l: '留下的记录', u: '条', m: 'records',
         why: s.records === 0 ? '这几天还没有任何记录' : null,
       },
       {
-        v: s.reviews, l: '练知识卡', u: '次',
+        v: s.reviews, l: '练知识卡', u: '次', m: 'reviews',
         why: s.reviews === 0 ? '这几天没有练习记录' : null,
       },
       {
         v: s.accuracy === null ? null : s.accuracy + '%', l: '答对的比例',
+        // ★ accuracy 的溯源要能看到"分母是怎么来的"，所以点开的明细 = 判得出对错的每一次
+        m: s.accuracy === null ? null : 'accuracy',
         sub: s.accuracy === null ? null : '对 ' + s.right + ' / 错 ' + s.wrong,
         why: '没有一次判得出对错的练习，算不出比例',
       },
       {
-        v: s.cardsTouched, l: '碰过的知识卡', u: '张',
+        v: s.cardsTouched, l: '碰过的知识卡', u: '张', m: 'cards',
         why: s.cardsTouched === 0 ? '这几天没有复习过任何卡' : null,
       },
       {
+        // ★ 这一张刻意**不给** m —— 它的分子分母是两个不同的东西（有记录的天 / 总天数），
+        //   后端没有对应的 metric，硬编一个会让"溯源"名不副实。
         v: s.daysWithRecord + ' / ' + report.daysCount, l: '有记录的天数',
       },
-    ].map(c => '<div class="w-kpi">' + wNum(c.v, c.u, c.why) +
+    ].map(c => '<div class="w-kpi">' + (c.m ? wNumLink(c.v, c.u, c.m, c.l, c.why) : wNum(c.v, c.u, c.why)) +
       '<span>' + HL.esc(c.l) + '</span>' +
       (c.sub ? '<em class="w-sub">' + HL.esc(c.sub) + '</em>' : '') + '</div>').join('');
 
@@ -2893,6 +3066,21 @@
 
     const body =
       '<div class="w-grid">' + kpi + '</div>' +
+      // ★ 溯源抽屉：数字点开后的明细落在这里。
+      //   它是**一个固定的空容器**，内容由 loadWeeklyEvidence 填 ——
+      //   容器在 renderWeekly 里就建好，保证任何时刻 $('#weeklyEv') 都取得到，
+      //   不必依赖点击顺序（本项目踩过"取数的函数先于建容器执行"的坑）。
+      //   没有它的时候它是 display:none，不占高度，不影响布局。
+      // ★★ 容器**不许**带 data-wm：data-wm 的语义是"点这个按钮要看哪个指标的明细"，
+      //   它是**动作属性**。容器用它做"当前展开的是哪个指标"是**另一种语义**，
+      //   同一个属性名复用两种语义 = 本项目记在案的定时炸弹（曾把动作按钮绑成别的动作）。
+      //   展开状态用 data-ev（view 属性），与动作属性严格分开。
+      '<div class="w-sec w-ev-sec" id="weeklyEv" data-open="0" data-ev=""></div>' +
+
+      '<p class="w-note w-ev-hint">上面每个数字都能点开，看它是这几天的哪些记录凑出来的 —— ' +
+        '点不动的那张（显示「—」）是本来就 <b>算不出来</b> 的，不是被藏起来了。</p>' +
+
+      renderCompare(report.compare) +
 
       '<div class="w-sec"><h4>这几天</h4><div class="w-days">' + days + '</div>' +
         '<p class="w-note">灰色的是没有留下记录的那天 —— 那是「没有记录」，不是「0 条」。</p></div>' +
@@ -3049,6 +3237,13 @@
         if (!confirm('定稿之后就改不了了，确定吗？')) return;
         saveWeeklyNote(true); return;
       }
+      // ★ 溯源：点数字看明细 / 点 × 收起。
+      //   用 closest 而不是判 t.dataset —— 按钮里的 <u>明细</u> 才是真正被点到的东西，
+      //   直接读 e.target.dataset.wm 会取到 undefined，点了没反应且不报错。
+      const evBtn = t.closest ? t.closest('[data-wm]') : null;
+      if (evBtn && evBtn.dataset.wm) { loadWeeklyEvidence(evBtn.dataset.wm); return; }
+      const evX = t.closest ? t.closest('.w-ev-x') : null;
+      if (evX) { closeWeeklyEvidence(); return; }
       const h = t.closest ? t.closest('.w-hist') : null;
       if (h) loadWeekly({ from: h.dataset.hfrom, to: h.dataset.hto });
     });
@@ -3425,11 +3620,14 @@
       const r = await api('/api/skills');
       S.skills = r.skills || [];
       S.skillEnabled = r.enabled || [];
+      S.skillTier = r.tier || null;        // 本空间档位（批次25）
+      S.skillTiers = r.tiers || [];
       // 顶级导航砍成两根之后，能力徽标改挂在知识库的「能力」分区上
       setTabBadge('skills', S.skillEnabled.length);
       renderSkillCats();
       renderSkillSubjects();
       renderSkillList();
+      renderSkillTierNote();
     } catch (e) { toast(e.message); }
   }
   /** 当前"分类"下的条目。学科是二级筛选，只在分类结果里再切一层。 */
@@ -3462,25 +3660,76 @@
       .map(x => '<button class="cat-chip' + (skillSubject === x.k ? ' on' : '') + '" data-subj="' + x.k + '" type="button">' +
         x.n + ' ' + x.c + '</button>').join('');
   }
+  /** 档位说明条（批次25）。
+   *  为什么要明说：锁定的卡片如果只是变灰，学生会以为"坏了/加载不出来"。
+   *  这里必须回答三件事：我现在是哪一档、锁住的有多少、想开要找谁。
+   *  ★ 措辞上不能写成"升级""解锁奖励" —— 那不是奖励机制，是（家长/老师给的）授权。 */
+  function renderSkillTierNote() {
+    const box = $('#skillTierNote');
+    if (!box) return;
+    const locked = (S.skills || []).filter(s => s.locked).length;
+    if (!S.skillTier || !locked) { box.hidden = true; box.innerHTML = ''; return; }
+    const cur = (S.skillTiers || []).filter(t => t.key === S.skillTier)[0];
+    const curName = cur ? cur.name : S.skillTier;
+    box.hidden = false;
+    box.innerHTML =
+      '<span class="tn-ico">🔒</span>' +
+      '<span class="tn-txt">当前是「<b>' + HL.esc(curName) + '</b>」档，本档可用 ' +
+        (S.skills.length - locked) + ' 条，另有 <b>' + locked + '</b> 条需要更高档位。' +
+      '<span class="dim">这些由空间管理员开放，不是靠学得多自动解锁。</span></span>';
+  }
   function renderSkillList() {
     let list = skillPool();
     if (skillSubject !== 'all') list = list.filter(s => s.subject === skillSubject);
     if (!list.length) { $('#skillList').innerHTML = '<div class="empty"><p>这个筛选下还没有能力。</p></div>'; return; }
+    // 图标：后端 icon_svg 存的是**图标名**（如 'feynman'），由 HL.skillIcons 翻成原生 SVG。
+    // 名字对不上时 icon() 返回兜底菱形，卡片不会出现空洞或 "undefined"。
+    const skIcon = (HL.skillIcons && HL.skillIcons.icon)
+      ? HL.skillIcons.icon : function () { return ''; };
     $('#skillList').innerHTML = '<div class="skill-grid">' + list.map(s =>
-      '<div class="skill-c' + (s.enabled ? ' on' : '') + '" data-id="' + s.id + '" role="button" tabindex="0">' +
-      '<div class="sc-top"><span class="sc-n">' + HL.esc(s.name) + '</span><span class="tgl"></span></div>' +
+      '<div class="skill-c' + (s.enabled ? ' on' : '') + (s.locked ? ' locked' : '') +
+        '" data-id="' + s.id + '" role="button" tabindex="0"' +
+        (s.locked ? ' aria-disabled="true" title="' + HL.esc(s.lockedNote || '') + '"' : '') + '>' +
+      '<div class="sc-top">' +
+        '<span class="sc-ico">' + skIcon(s.icon) + '</span>' +
+        '<span class="sc-n">' + HL.esc(s.name) + '</span>' +
+        // 锁定态不画开关 —— 画一个点不动的开关比不画更让人困惑
+        (s.locked ? '<span class="sc-lock" title="' + HL.esc(s.lockedNote || '') + '">🔒</span>' : '<span class="tgl"></span>') +
+      '</div>' +
       '<div class="sc-d">' + HL.esc(s.description) + '</div>' +
       '<div class="sc-b"><span>' + (SUBJ_NAME[s.subject] || s.subject) + '</span><span>·</span><span>' +
-      ({ method: '方法', subject: '学科', tool: '工具' }[s.category] || s.category) + '</span></div>' +
+      ({ method: '方法', subject: '学科', tool: '工具' }[s.category] || s.category) + '</span>' +
+      // 档位标签：锁定时写清"需要哪一档"，不是只写个"锁"
+      (s.locked ? '<span class="sc-tier">需「' + HL.esc(s.tierName || '') + '」</span>' : '') +
+      '</div>' +
+      // 「用它开一段对话」：以这个技能的身份新建会话（不是把这个技能全局打开）。
+      // 触发点很小、在卡片底部，避免和"卡片整体点一下=开关"混淆。锁定的技能不给入口。
+      (s.locked ? '' : '<button class="sc-go" type="button" data-go="' + s.id + '">用它开一段对话</button>') +
       '</div>').join('') + '</div>';
   }
   async function toggleSkill(id) {
+    const s = S.skills.filter(x => x.id === id)[0];
+    // 锁定的技能：不发请求（服务端也会 403，但没必要跑一趟），直接说清原因
+    if (s && s.locked) { toast(s.lockedNote || '这个能力当前档位还不能用'); return; }
     const on = (S.skillEnabled || []).indexOf(id) >= 0;
     try {
       await api('/api/skills/' + id + '/grant', { method: on ? 'DELETE' : 'POST' });
       await loadSkills();
-      const s = S.skills.filter(x => x.id === id)[0];
       toast(on ? '已取消「' + (s ? s.name : id) + '」' : '已启用「' + (s ? s.name : id) + '」，下一句对话就生效');
+    } catch (e) { toast(e.message); }
+  }
+  /** 以某个技能的身份开一段新对话。
+   *  走的是**对话级技能**（conversations.agent_id），不动全局启用列表 ——
+   *  否则学生试一次技能，之后每段对话都被它管着。 */
+  async function openSkillChat(id) {
+    const s = S.skills.filter(x => x.id === id)[0];
+    if (s && s.locked) { toast(s.lockedNote || '这个能力当前档位还不能用'); return; }
+    const name = s ? s.name : id;
+    try {
+      S.agentId = id;                 // 先落到本地状态，新建对话时带上
+      S.pendingProjectId = null;
+      await newConv({ keepAgent: true });
+      toast('已按「' + name + '」的方式开了一段对话');
     } catch (e) { toast(e.message); }
   }
 
@@ -3503,6 +3752,410 @@
     } catch (e) { toast('朗读失败'); }
   }
 
+  // ---------- 单元四关（批次24）----------
+  /**
+   * ★ 四关是四个**动作**（认得出 → 读得准 → 写得出 → 用得上），不是把同一个练习拆四块。
+   *   后端只出结构化 JSON（每关 passed/total/pct），进度条由这里用**原生 DOM** 画。
+   *
+   * ★★ 算不出来 vs 确实是 0（本项目反复踩的坑，这里也必须分开）：
+   *   - `pct === null` ⇒ 这个单元还没有词，进度条画成**灰色虚线底**并写「还没词」，
+   *     绝不写 0% —— 0% 会被读成"一个词都没过"。
+   *   - `pct === 0` 且 `total > 0` ⇒ 真的一个都没过，画成 0% 实心条，可以点进去练。
+   *
+   * ★ 「用」这一关不显示答对率（它本来就不判对错），只显示"用上了几个词"。
+   */
+  const EN_GATE_ICON = { recognize: '认', read: '读', recall: '背', use: '用' };
+  let enBoard = null;
+  let enGate = null;              // 当前打开的关卡数据
+
+  async function loadEnGates() {
+    const box = $('#enGates');
+    if (!box) return;
+    try {
+      const [b, rv] = await Promise.all([
+        api('/api/english/board'),
+        api('/api/english/review' + (enUnit ? '?unitId=' + encodeURIComponent(enUnit) : '')),
+      ]);
+      enBoard = b;
+      box.innerHTML = renderEnGates(b);
+      renderEnReview(rv.queue, rv.stats);
+    } catch (e) {
+      box.innerHTML = '<div class="en4-err">' + HL.esc(e.message) + '</div>';
+    }
+  }
+
+  function enPctBar(g) {
+    // ★ null 与 0 必须长得不一样：null 是"没有分母"，画虚线底 + 无填充
+    if (g.pct === null) {
+      return '<div class="en4-bar na" title="这个单元还没有单词，算不出进度">' +
+        '<i style="width:0"></i></div>' +
+        '<span class="en4-pct na">还没词</span>';
+    }
+    return '<div class="en4-bar" title="' + g.passed + ' / ' + g.total + ' 个词过了这一关">' +
+      '<i style="width:' + g.pct + '%"></i></div>' +
+      '<span class="en4-pct">' + g.pct + '%</span>';
+  }
+
+  function renderEnGates(b) {
+    if (!b.totalWords) {
+      return '<div class="en4-empty">还没有单词。<b>先导入词表</b>，四关就会出现在这里。' +
+        '<div class="en4-empty-s">认 → 读 → 背 → 用，四关按「先认得出、再写得出、最后用得上」排。' +
+        '你可以按顺序走，也可以只练其中一关。</div></div>';
+    }
+    const units = b.units || [];
+    if (!units.length) {
+      return '<div class="en4-empty">有 ' + b.totalWords + ' 个词，但都还没归入单元。' +
+        '<div class="en4-empty-s">可以先用「+ 单元」建一个，也可以直接开始练 —— 下面的关卡对全部单词生效。</div>' +
+        renderGateRow(null, b.totalWords) + '</div>';
+    }
+    return units.map(u => {
+      const cur = u.nextGate || null;
+      // ★ 空单元没有"下一关"：写「下一关：」后面空着会像界面坏了。
+      //   改成明说"还没有词"—— 这是算不出来的情况，不是没渲染出来。
+      const status = u.allPassed
+        ? '<span class="en4-u-ok">四关都过了</span>'
+        : cur
+          ? '<span class="en4-u-n">下一关：' + (EN_GATE_ICON[cur] || '') + '</span>'
+          : '<span class="en4-u-n">还没有词</span>';
+      return '<div class="en4-unit' + (u.allPassed ? ' done' : '') + '">' +
+        '<div class="en4-u-h"><b>' + HL.esc(u.name) + '</b>' +
+        '<span class="en4-u-n">' + u.total + ' 个词</span>' + status +
+        '</div>' +
+        '<div class="en4-gates">' + u.gates.map(g => gateCard(g, u)).join('') + '</div>' +
+        '</div>';
+    }).join('');
+  }
+
+  function gateCard(g, u) {
+    // 「用」这一关的进度条含义不同：它不是"对了几分"，是"用上了几个词"
+    const cnt = g.key === 'use'
+      ? '<span class="en4-cnt">用上 ' + g.passed + '/' + g.total + '</span>'
+      : '<span class="en4-cnt">' + g.passed + '/' + g.total + '</span>';
+    // ★ 单元进度对象的 id 字段叫 unitId（不是 id）。写成 u.id 会渲染出 data-uid="undefined"，
+    //   点关卡时拿这个假 id 去请求 —— 界面看着正常，点下去没反应且零报错。
+    return '<button class="en4-gate" type="button" data-gate="' + g.key + '"' +
+      (u && u.unitId ? ' data-uid="' + HL.esc(u.unitId) + '"' : '') + ' title="' + HL.esc(g.what) + '">' +
+      '<span class="en4-ic">' + (EN_GATE_ICON[g.key] || '') + '</span>' +
+      '<span class="en4-nm">' + HL.esc(g.short) + '</span>' +
+      enPctBar(g) + cnt +
+      '</button>';
+  }
+
+  /** 没有单元时也给一排关卡（对着全部单词练） */
+  function renderGateRow() {
+    const fake = { key: '', id: '' };
+    return '<div class="en4-gates en4-gates-all">' +
+      ['recognize', 'read', 'recall', 'use'].map(k =>
+        '<button class="en4-gate" type="button" data-gate="' + k + '">' +
+        '<span class="en4-ic">' + EN_GATE_ICON[k] + '</span>' +
+        '<span class="en4-nm">' + ({ recognize: '认得出', read: '读得准', recall: '写得出', use: '用得上' })[k] + '</span>' +
+        '<span class="en4-pct na">点开就练</span></button>').join('') + '</div>';
+  }
+
+  // ---------- 艾宾浩斯复习队列 ----------
+  /**
+   * ★ 新词与到期复习分开显示。把没碰过的词混进"今天该复习"，那个数字就是假的。
+   * ★ 一次都没判过 ⇒ 不显示正确率（写「还没法算」），不写 0%。
+   */
+  function renderEnReview(q, s) {
+    const box = $('#enReview');
+    if (!box) return;
+    const st = s || {};
+    if (!st.total) { box.innerHTML = ''; return; }
+    const acc = st.accuracy === null
+      ? '<span class="en4-na">还没法算</span>'
+      : '<b>' + st.accuracy + '%</b>';
+    box.innerHTML =
+      '<div class="en4-rv">' +
+      '<div class="en4-rv-h"><b>复习</b>' +
+      '<span class="en4-rv-n">按 1 · 3 · 5 · 7 天排，连对 5 次后 14 天再看一次</span></div>' +
+      '<div class="en4-rv-s">' +
+      '<span>该复习 <b>' + (q ? q.dueCount : 0) + '</b></span>' +
+      '<span>没碰过 <b>' + st.neverReviewed + '</b></span>' +
+      '<span>练过 <b>' + st.reviewed + '/' + st.total + '</b></span>' +
+      '<span>判对率 ' + acc + '</span>' +
+      '</div>' +
+      (q && q.note ? '<div class="en4-rv-tip">' + HL.esc(q.note) + '</div>' : '') +
+      '<div class="en4-rv-a">' +
+      '<button class="btn primary sm" id="enReviewGo" type="button"' +
+      (q && q.dueCount ? '' : ' disabled') + '>' +
+      (q && q.dueCount ? '开始复习（' + q.dueCount + ' 个）' : '现在没有要复习的') + '</button>' +
+      (st.avgIntervalDays !== null && st.avgIntervalDays !== undefined
+        ? '<span class="en4-rv-d">平均间隔 ' + st.avgIntervalDays + ' 天</span>' : '') +
+      '</div>' +
+      '</div>';
+  }
+
+  // ---------- 复习（艾宾浩斯）----------
+  /**
+   * ★ 复习只问一件事：「这个中文，英文怎么写」—— 也就是四关里"背"的那一关。
+   *   为什么复习不复用"认"：认得出但写不出，才是真正需要练的地方。复习一直用最弱的那一关，
+   *   学生才不会复习得很开心、听写全错。
+   *
+   * ★ 每个词可以选「想不起来」⇒ 记 unknown。这不是"错"，是"还没到这个份上"：
+   *   unknown 不清零连对次数，也不推进。宁可让学生诚实地说"不知道"，也不要逼他瞎猜。
+   */
+  let reviewRun = null;
+  function openReviewRun(items) {
+    reviewRun = { items: items, done: 0 };
+    openModal('复习 · ' + items.length + ' 个词', reviewHTML());
+    bindReview();
+  }
+  function reviewHTML() {
+    const rows = reviewRun.items.map((w, i) =>
+      '<div class="en4-q en4-rv-q" id="rv_' + w.id + '">' +
+      '<div class="en4-q-h"><span class="en4-q-n">' + (i + 1) + '/' + reviewRun.items.length + '</span>' +
+      '<b class="en4-q-w">' + HL.esc(w.meaning || w.word) + '</b>' +
+      (w.overdueDays ? '<span class="en4-rv-od">过期 ' + w.overdueDays + ' 天</span>' : '') +
+      '<span class="en4-rv-c">连对 ' + (w.consecutive || 0) + '</span>' +
+      '</div>' +
+      '<input class="inp" id="rvi_' + w.id + '" style="width:100%;font-family:var(--mono)" placeholder="写英文" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+      '<div class="en4-fb" id="rvf_' + w.id + '"></div>' +
+      '</div>').join('');
+    return '<div class="pool-note">按 1 · 3 · 5 · 7 天排的。写不出来就点「想不起来」—— <b>不扣连对次数</b>，只是这次不算过。</div>' +
+      '<div class="en4-wrap-q" id="rvWrap">' + rows + '</div>' +
+      '<div id="rvSum"></div>' +
+      '<div class="pc-acts"><button class="btn primary sm" id="rvGo" type="button">交卷</button>' +
+      '<span class="sp"></span><button class="btn ghost sm" id="rvClose" type="button">先不练了</button></div>';
+  }
+  function bindReview() {
+    // 「想不起来」按钮由每个词的行内按钮触发；用委托读 dataset
+    $('#rvWrap').addEventListener('click', ev => {
+      const b = ev.target.closest('[data-rvunk]');
+      if (!b) return;
+      const id = b.dataset.rvunk;
+      submitOneReview(id, 'unknown', b);
+    });
+    // 想不起来按钮是动态加的：给每个词补一个
+    reviewRun.items.forEach(w => {
+      const inp = $('#rvi_' + w.id);
+      if (!inp) return;
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'btn ghost sm'; btn.textContent = '想不起来';
+      btn.dataset.rvunk = w.id;
+      inp.parentNode.insertBefore(btn, inp.nextSibling);
+    });
+    $('#rvClose').addEventListener('click', async () => { closeModal(); await loadEnGates(); });
+    $('#rvGo').addEventListener('click', async () => {
+      const go = $('#rvGo'); go.disabled = true; go.textContent = '批改中…';
+      let right = 0, wrong = 0, unknown = 0;
+      for (const w of reviewRun.items) {
+        const inp = $('#rvi_' + w.id);
+        if (!inp || inp.disabled) continue;
+        const ans = (inp.value || '').trim();
+        // ★ 空着不写 = 想不起来，不是答错。逼学生瞎猜没有任何好处。
+        const r = await submitOneReview(w.id, ans ? (ans.toLowerCase() === String(w.word).toLowerCase() ? 'right' : 'wrong') : 'unknown', null, ans);
+        if (r === 'right') right++; else if (r === 'wrong') wrong++; else unknown++;
+      }
+      const sum = $('#rvSum');
+      if (sum) {
+        sum.innerHTML = '<div class="en4-sum"><b>' + (right + wrong ? Math.round(right / (right + wrong) * 100) + '%' : '—') + '</b>' +
+          '<span class="dim">' + right + ' 个写对 · ' + wrong + ' 个写错 · ' + unknown + ' 个想不起来</span></div>' +
+          '<div class="pool-note">写对的明天不用再看；写错的明天再来一次；想不起来的<b>进度没动</b>。</div>';
+      }
+      go.style.display = 'none';
+      await loadEnGates();
+    });
+  }
+  /** 单个词记一次复习并把它那一行标出来。返回这次的结果码。 */
+  async function submitOneReview(wordId, result, btn, typed) {
+    try {
+      const r = await api('/api/english/review', { method: 'POST', body: { wordId: wordId, gate: 'recall', result: result } });
+      const inp = $('#rvi_' + wordId);
+      const fb = $('#rvf_' + wordId);
+      const q = $('#rv_' + wordId);
+      if (inp) inp.disabled = true;
+      if (btn) btn.disabled = true;
+      if (q) q.classList.add(result === 'right' ? 'ok' : result === 'wrong' ? 'bad' : 'unk');
+      if (fb) {
+        fb.className = 'en4-fb ' + (result === 'right' ? 'ok' : result === 'wrong' ? 'bad' : 'mid');
+        fb.innerHTML = result === 'right'
+          ? '✓ 对了。下次 ' + r.dueInDays + ' 天后再看'
+          : result === 'wrong'
+            ? '✗ 你写的是「' + HL.esc(typed || '（空）') + '」，正确是 <b>' + HL.esc(r.word) + '</b>。明天再来一次'
+            : '这次不算过，但<b>连对进度没清零</b>（还是 ' + r.consecutive + '）';
+      }
+      return r.result;
+    } catch (e) { toast(e.message); return 'unknown'; }
+  }
+
+  // ---------- 关卡的答题界面 ----------
+  async function openGate(gateKey, unitId, unitName) {
+    let d;
+    try { d = await api('/api/english/gate?gate=' + encodeURIComponent(gateKey) + (unitId ? '&unitId=' + encodeURIComponent(unitId) : '')); }
+    catch (e) { toast(e.message); return; }
+    if (!d.items.length) { toast('这个范围里还没有单词，先导入几个'); return; }
+    enGate = { data: d, items: d.items, unitId: unitId || '' };
+    const title = (unitName ? unitName + ' · ' : '') + '第 ' + (EN_GATE_ICON[gateKey] || '') + ' 关';
+    openModal(title, gateHTML());
+    bindGate();
+  }
+
+  function gateHTML() {
+    const d = enGate.data;
+    let body = '';
+    if (d.gate === 'recognize') {
+      body = d.items.map((it, i) =>
+        '<div class="en4-q" id="gq_' + it.id + '">' +
+        '<div class="en4-q-h"><span class="en4-q-n">' + (i + 1) + '/' + d.items.length + '</span>' +
+        '<b class="en4-q-w">' + HL.esc(it.prompt) + '</b>' +
+        (it.phonetic ? '<span class="en4-q-p">' + HL.esc(it.phonetic) + '</span>' : '') +
+        '<button class="speak-btn" data-speak="' + HL.esc(it.prompt) + '" type="button" title="听一听">🔊</button>' +
+        '</div>' +
+        '<div class="en4-ch">' + it.choices.map(c =>
+          '<button class="en4-ch-i" type="button" data-ch="' + HL.esc(c) + '">' + HL.esc(c) + '</button>').join('') +
+        '</div>' +
+        // ★ 每题都要有自己的反馈容器：paintGateResult 里靠它取节点，取不到会**整条 return**，
+        //   于是"交卷后什么都没发生"且零报错（实测就是这么假绿的）。
+        '<div class="en4-fb" id="gf_' + it.id + '"></div>' +
+        '</div>').join('');
+    } else if (d.gate === 'read') {
+      body = d.items.map((it, i) =>
+        '<div class="en4-q en4-read" id="gq_' + it.id + '">' +
+        '<div class="en4-q-h"><span class="en4-q-n">' + (i + 1) + '/' + d.items.length + '</span>' +
+        '<b class="en4-q-w">' + HL.esc(it.prompt) + '</b>' +
+        '<span class="en4-q-p">' + HL.esc(it.phonetic || '') + '</span>' +
+        '<span class="sp"></span>' +
+        '<button class="speak-btn" data-speak="' + HL.esc(it.prompt) + '" type="button" title="听标准读音">🔊</button>' +
+        (SR ? '<button class="speak-btn" data-say="' + HL.esc(it.prompt) + '" type="button" title="跟读，看识别成了什么">🎤</button>' : '') +
+        '</div>' +
+        '<div class="en4-q-m">' + HL.esc(it.meaning || '') + '</div>' +
+        '<div class="en4-mark" id="gm_' + it.id + '"></div>' +
+        '</div>').join('');
+    } else if (d.gate === 'use') {
+      body = d.items.map((it, i) =>
+        '<div class="en4-q" id="gq_' + it.id + '">' +
+        '<div class="en4-q-h"><span class="en4-q-n">' + (i + 1) + '/' + d.items.length + '</span>' +
+        '<b class="en4-q-w">' + HL.esc(it.prompt) + '</b>' +
+        '<button class="speak-btn" data-speak="' + HL.esc(it.prompt) + '" type="button" title="听一听">🔊</button>' +
+        (it.meaning ? '<span class="en4-q-p">' + HL.esc(it.meaning) + '</span>' : '') +
+        '</div>' +
+        '<div class="en4-start">试试这样开头：' + it.starters.slice(0, 3).map(s => '<code>' + HL.esc(s) + '</code>').join('') + '</div>' +
+        '<input class="inp" id="ga_' + it.id + '" style="width:100%" placeholder="用「' + HL.esc(it.prompt) + '」写一句自己的话" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+        '<div class="en4-fb" id="gf_' + it.id + '"></div>' +
+        '</div>').join('');
+    } else {
+      body = d.items.map((it, i) =>
+        '<div class="en4-q" id="gq_' + it.id + '">' +
+        '<div class="en4-q-h"><span class="en4-q-n">' + (i + 1) + '/' + d.items.length + '</span>' +
+        '<b class="en4-q-w">' + HL.esc(it.prompt) + '</b>' +
+        '<span class="en4-q-l">' + new Array((it.letters || 0) + 1).join('·') + '</span>' +
+        '</div>' +
+        '<input class="inp" id="ga_' + it.id + '" style="width:100%;font-family:var(--mono)" placeholder="写英文" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+        '<div class="en4-fb" id="gf_' + it.id + '"></div>' +
+        '</div>').join('');
+    }
+    const hint = d.gate === 'use'
+      ? '<div class="pool-note">这一关<b>不判对错</b> —— 造句的正确答案有无数个，打分等于用一把尺子量所有形状。交上来只告诉你"用上了没有"。</div>'
+      : d.gate === 'read'
+        ? '<div class="pool-note">这一关<b>不打分</b>。点 🔊 听标准读音，点 🎤 跟读 —— 只告诉你浏览器把它识别成了什么，不是音准分数。</div>'
+        : '<div class="pool-note">' + (d.gate === 'recall'
+          ? '看中文写英文。答错的词会自动变成拼写卡，进复习队列。'
+          : '看英文选中文意思。只用认得出就行，选错了不要紧。') + '</div>';
+    return hint +
+      '<div class="en4-wrap-q">' + body + '</div>' +
+      '<div id="gSum"></div>' +
+      '<div class="pc-acts">' +
+      (d.gate === 'read'
+        ? '<button class="btn primary sm" id="gSkip" type="button">这一关打不了分，跳过 →</button>'
+        : '<button class="btn primary sm" id="gGo" type="button">交卷</button>') +
+      '<span class="sp"></span><button class="btn ghost sm" id="gAgain" type="button">换一批</button></div>';
+  }
+
+  let gatePicked = {};             // 「认」这一关选了哪个（answer 存中文文本）
+  function bindGate() {
+    gatePicked = {};
+    const d = enGate.data;
+    const list = $('#modalBody .en4-wrap-q');
+    if (list) list.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-ch]');
+      if (!b) return;
+      const q = b.closest('.en4-q');
+      $$('.en4-ch-i', q).forEach(x => x.classList.toggle('on', x === b));
+      gatePicked[q.id.replace('gq_', '')] = b.dataset.ch;
+    });
+    const again = $('#gAgain');
+    if (again) again.addEventListener('click', () => { closeModal(); openGate(d.gate, enGate.unitId); });
+    const skip = $('#gSkip');
+    if (skip) skip.addEventListener('click', async () => {
+      // 「读」这一关练的是听和说，本来就没有可提交的东西。但"读过了"要落一条痕迹，
+      // 否则明天复核时它仍是"从没碰过"，与事实不符。
+      closeModal();
+      toast('跟读这一关不记分，进度按你点过 🔊/🎤 的单词算');
+      await loadEnGates();
+    });
+    const go = $('#gGo');
+    if (go) go.addEventListener('click', async () => {
+      const items = enGate.items.map(it => ({
+        id: it.id,
+        answer: d.gate === 'recognize'
+          ? (gatePicked[it.id] || '')
+          : (($('#ga_' + it.id) || {}).value || '').trim(),
+      }));
+      go.disabled = true; go.textContent = '批改中…';
+      try {
+        const r = await api('/api/english/gate/grade', { method: 'POST', body: { gate: d.gate, items: items, createCards: true } });
+        paintGateResult(r);
+      } catch (e) { toast(e.message); go.disabled = false; go.textContent = '交卷'; }
+    });
+  }
+
+  function paintGateResult(r) {
+    r.results.forEach(res => {
+      const q = $('#gq_' + res.id);
+      const fb = $('#gf_' + res.id) || $('#gm_' + res.id);
+      if (!q || !fb) return;
+      if (r.gate === 'use') {
+        // ★ 造句不判对错：勾/叉都不画，只标"用上了没有"
+        q.classList.add(res.used ? 'used' : 'noused');
+        fb.className = 'en4-fb ' + (res.used ? 'ok' : 'mid');
+        fb.innerHTML = HL.esc(res.note);
+        const inp = $('#ga_' + res.id); if (inp) inp.disabled = true;
+        return;
+      }
+      q.classList.add(res.ok ? 'ok' : 'bad');
+      if (r.gate === 'recognize') {
+        // 选项上标出对错（正确项描出来，选错的那个划掉）
+        $$('.en4-ch-i', q).forEach(b => {
+          b.disabled = true;
+          if (res.ok && b.dataset.ch === res.answer) b.classList.add('ok');
+          if (!res.ok && b.dataset.ch === res.answer) b.classList.add('ok');
+          if (!res.ok && b.classList.contains('on')) b.classList.add('bad');
+        });
+      }
+      const inp = $('#ga_' + res.id); if (inp) inp.disabled = true;
+      fb.className = 'en4-fb ' + (res.ok ? 'ok' : 'bad');
+      fb.innerHTML = res.ok
+        ? '✓ ' + HL.esc(res.word) + (res.meaning ? ' · ' + HL.esc(res.meaning) : '')
+        : '✗ 你写的是「' + HL.esc(res.answer || '（空）') + '」' +
+          (res.diff ? '，' + HL.esc(res.diff.message) : '') +
+          '<div class="en4-fb-x">正确写法是 <b>' + HL.esc(res.word) + '</b></div>';
+    });
+
+    const sum = $('#gSum');
+    if (sum) {
+      if (r.gate === 'use') {
+        const used = r.results.filter(x => x.used).length;
+        sum.innerHTML = '<div class="en4-sum"><b>' + used + '/' + r.total + '</b>' +
+          '<span class="dim">句子里用上了这些词</span></div>' +
+          '<div class="pool-note">' + HL.esc(r.note) + '</div>';
+      } else {
+        sum.innerHTML = '<div class="en4-sum"><b>' + r.right + '/' + r.total + '</b>' +
+          '<span class="dim">答对 ' + r.accuracy + '%</span>' +
+          (r.cardsCreated ? '<span class="dim">· ' + r.cardsCreated + ' 个错词已转成拼写卡</span>' : '') +
+          '</div>' +
+          (r.wrongWords && r.wrongWords.length
+            ? '<div class="pool-note">这次没写出来的：' + r.wrongWords.map(w =>
+              '<b>' + HL.esc(w.word) + '</b>' + (w.meaning ? '（' + HL.esc(w.meaning) + '）' : '')).join('、') + '</div>'
+            : '');
+      }
+    }
+    const g = $('#gGo'); if (g) g.style.display = 'none';
+    loadEnGates();
+    loadCardSummary();
+    loadPet(true);
+  }
+
   async function loadEn() {
     const box = $('#enList');
     if (!box.dataset.ready) box.innerHTML = '<div class="skel" style="height:54px;margin-bottom:8px"></div><div class="skel" style="height:54px"></div>';
@@ -3516,6 +4169,8 @@
       S.en = { units: u.units || [], words: w.words || [] };
       box.dataset.ready = '1';
       renderEnStats(); renderEnUnits(); renderEnList();
+      // 四关与复习队列独立取数：失败不该把单词列表也拖掉
+      loadEnGates();
     } catch (e) { box.innerHTML = '<div class="empty"><p>' + HL.esc(e.message) + '</p></div>'; }
   }
   function renderEnStats() {
@@ -3684,6 +4339,132 @@
     try { rec.start(); } catch (e) { toast('启动识别失败'); }
   }
 
+  // ================= 7 阶段成长画像（批次22-③）=================
+  /**
+   * ★ 后端只出**结构化 JSON**（dimensions / stages），图形由这里用**原生 SVG** 画。
+   *   按项目铁律：需要被理解/编辑/导出 → SVG；绝不让模型/后端产出图片。
+   *
+   * ★ 三条渲染规矩：
+   *   ① 维度 value === null ⇒ 该顶点画在**中心**并标注"还看不出来"，
+   *      且**不连线到它**（否则会读成"这一项是 0"）。0 与"算不出来"在图形上也必须可分。
+   *   ② 不画分数、不写百分比、不排名。雷达图只是"哪块凹下去"的形状，不是分值。
+   *   ③ 阶段阶梯用"点亮/未点亮"，不给等级名次。
+   */
+  let growthData = null;
+
+  async function loadGrowth() {
+    const box = $('#growthBox');
+    if (!box) return;
+    if (!growthData) box.innerHTML = '<div class="skel" style="height:150px"></div>';
+    try {
+      const r = await api('/api/growth');
+      growthData = r.portrait;
+      box.innerHTML = renderGrowth(growthData);
+    } catch (e) {
+      box.innerHTML = '<div class="g-err">' + HL.esc(e.message) + '</div>';
+    }
+  }
+
+  /** 雷达图：6 轴。null 的轴不参与连线，只画一个"空点"。 */
+  function growthRadar(dims) {
+    // ★ 画布要留出标签的余量：原来 W=300/R=96 时，最大的那个字（"碰过的范围" 5 字）
+    //   会顶到画布外、压到右侧维度列表上（实测桌面截图里两处文字重叠）。
+    //   现在把画布加宽、半径收小，并给底部留更多空间（最下面那轴的标签更长）。
+    const W = 340, H = 300, cx = 170, cy = 150, R = 92;
+    const n = dims.length || 1;
+    const ang = i => -Math.PI / 2 + i * 2 * Math.PI / n;
+    const pt = (i, frac) => [cx + Math.cos(ang(i)) * R * frac, cy + Math.sin(ang(i)) * R * frac];
+
+    // 网格：4 圈
+    let grid = '';
+    [0.25, 0.5, 0.75, 1].forEach(f => {
+      const p = dims.map((d, i) => pt(i, f).map(v => v.toFixed(1)).join(',')).join(' ');
+      grid += '<polygon points="' + p + '" fill="none" stroke="var(--line)" stroke-width="1"/>';
+    });
+    // 轴线
+    dims.forEach((d, i) => {
+      const p = pt(i, 1);
+      grid += '<line x1="' + cx + '" y1="' + cy + '" x2="' + p[0].toFixed(1) + '" y2="' + p[1].toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
+    });
+
+    // ★ 数据面：只把**算得出来**的轴连起来。null 的轴不参与 —— 这是"不许补 0"在图上的体现。
+    const known = dims.map((d, i) => ({ i, v: d.value })).filter(x => x.v !== null);
+    let area = '', dots = '', labels = '';
+    if (known.length >= 2) {
+      const p = known.map(x => pt(x.i, Math.max(0, Math.min(100, x.v)) / 100).map(v => v.toFixed(1)).join(',')).join(' ');
+      area = '<polygon points="' + p + '" fill="var(--pri-soft)" stroke="var(--pri)" stroke-width="2" stroke-linejoin="round"/>';
+    }
+    dims.forEach((d, i) => {
+      const p = pt(i, d.value === null ? 0 : Math.max(0, Math.min(100, d.value)) / 100);
+      dots += d.value === null
+        // 算不出来的轴：空心小圈画在中心，并在标签旁标"看不了"
+        ? '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3" fill="none" stroke="var(--dim2)" stroke-width="1.5" stroke-dasharray="2 2"/>'
+        : '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3.5" fill="var(--pri)"/>';
+      // ★ 标签：横向半径给足（中文 5 字 ≈ 55px），纵向只留一点点 ——
+      //   因为上下两个轴（正上方/正下方）的标签是**竖着分开**的，多给纵向余量没意义，
+      //   反而会把画布撑高，把左右轴的标签推得更开、更不容易读。
+      const lr = 1.14, ly = 1.2;
+      const lp = [cx + Math.cos(ang(i)) * R * lr, cy + Math.sin(ang(i)) * R * ly];
+      const dx = lp[0] - cx;
+      const anchor = dx > 8 ? 'start' : (dx < -8 ? 'end' : 'middle');
+      // 底部那个轴的标签往下再多让一点，避免和相邻轴的字挤在一起
+      const dy = lp[1] > cy + 20 ? 12 : 4;
+      labels += '<text x="' + lp[0].toFixed(1) + '" y="' + (lp[1] + dy).toFixed(1) + '" text-anchor="' + anchor +
+        '" font-size="11" fill="' + (d.value === null ? 'var(--dim2)' : 'var(--txt)') + '">' + HL.esc(d.label) + '</text>';
+    });
+
+    return '<svg class="g-radar" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="六维度形状图">' +
+      grid + area + dots + labels + '</svg>';
+  }
+
+  function renderGrowth(p) {
+    const dims = p.dimensions || [];
+
+    // ① 雷达：只画形状，不给分值
+    const radar = growthRadar(dims);
+
+    // ② 维度明细：每项写清"这个数是从哪来的"，null 的一律显示"还看不出来"
+    const dimList = dims.map(d => {
+      const unknown = d.value === null;
+      return '<div class="g-dim' + (unknown ? ' na' : '') + '">' +
+        '<div class="g-dim-h"><b>' + HL.esc(d.label) + '</b>' +
+          (unknown
+            ? '<em class="g-na">还看不出来</em>'
+            : '<span class="g-dim-v">' + d.value + '<i>%</i></span>') + '</div>' +
+        '<p>' + HL.esc(d.why) + '</p>' +
+        '</div>';
+    }).join('');
+
+    // ③ 阶梯：7 步。已走过的点亮，当前这一步标出来，没到的灰着 —— 但**都给说明**
+    const ladder = (p.stages || []).map(st => {
+      const cls = st.reached ? 'on' : (p.nextStage && p.nextStage.index === st.index ? 'next' : '');
+      return '<div class="g-step ' + cls + '" data-stage="' + st.index + '">' +
+        '<i class="g-dot">' + st.index + '</i>' +
+        '<div class="g-step-b"><b>' + HL.esc(st.name) +
+          (st.reached ? '<span class="g-ok">已走到</span>' : '') + '</b>' +
+          '<span class="g-desc">' + HL.esc(st.desc) + '</span>' +
+          '<p>' + HL.esc(st.why) + '</p></div></div>';
+    }).join('');
+
+    // ④ 不评分要给出结构化理由（与周报 notScored 同规矩）
+    const ns = (p.notScored || []).map(x =>
+      '<div class="d-ns-i"><b>' + HL.esc(x.title) + '</b><p>' + HL.esc(x.why) + '</p></div>').join('');
+    const lim = (p.limits || []).map(x => '<li>' + HL.esc(x) + '</li>').join('');
+
+    const nextTxt = p.nextStage
+      ? '<b>' + HL.esc(p.nextStage.name) + '</b> —— ' + HL.esc(p.nextStage.why)
+      : '这 7 步都走到了。接下来的重点不是"再上一级"，而是把已有的做深。';
+
+    return '<div class="g-head">' +
+        '<h4>成长画像 <span>不说分数，只说"你现在能做哪些事"</span></h4>' +
+        '<p class="g-next">下一步看：' + nextTxt + '</p>' +
+      '</div>' +
+      '<div class="g-body">' + radar + '<div class="g-dims">' + dimList + '</div></div>' +
+      '<h4 class="g-lad-h">7 步走到哪了</h4><div class="g-ladder">' + ladder + '</div>' +
+      (ns ? '<details class="d-fold"><summary>为什么这里不给分数、不给排名</summary><div class="d-ns">' + ns + '</div></details>' : '') +
+      (lim ? '<details class="d-fold"><summary>这张画像不能证明什么</summary><ul class="d-lim">' + lim + '</ul></details>' : '');
+  }
+
   // ================= 测评（P6）=================
   const TYPE_NAME = { choice: '选择', spelling: '拼写', understanding: '理解' };
   let exams = [];
@@ -3691,6 +4472,8 @@
   async function loadExams() {
     const box = $('#exList');
     if (!box.dataset.ready) box.innerHTML = '<div class="skel" style="height:62px;margin-bottom:8px"></div><div class="skel" style="height:62px"></div>';
+    // ★ 画像与卷子是两件事，并行取；画像失败不许拖垮卷子列表
+    loadGrowth();
     try {
       const [a, b] = await Promise.all([api('/api/exams'), api('/api/exams/breakdown')]);
       exams = a.exams || [];
@@ -4920,11 +5703,17 @@
       skillSubject = b.dataset.subj; renderSkillSubjects(); renderSkillList();
     });
     $('#skillList').addEventListener('click', ev => {
+      // 「用它开一段对话」按钮在卡片内部，必须先拦它 ——
+      // 否则 closest('.skill-c') 会命中外层卡片、把"开对话"变成"开关技能"。
+      const go = ev.target.closest('[data-go]');
+      if (go) { ev.stopPropagation(); openSkillChat(go.dataset.go); return; }
       const c = ev.target.closest('.skill-c'); if (!c) return;
       toggleSkill(c.dataset.id);
     });
     $('#skillList').addEventListener('keydown', ev => {
       if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      // Enter/空格落在按钮上时交给 click 处理（避免开一次对话又切一次开关）
+      if (ev.target.closest('[data-go]')) return;
       const c = ev.target.closest('.skill-c'); if (!c) return;
       ev.preventDefault(); toggleSkill(c.dataset.id);
     });
@@ -5080,6 +5869,25 @@
     // 英语（P10）
     $('#enUnit').addEventListener('click', openNewUnit);
     $('#enImport').addEventListener('click', openImportWords);
+    // ★ 四关与复习队列都是动态重建的，委托必须挂在**稳定的父容器** #view-en 上。
+    //   挂到 #enGates 上会在第一次重建后失效（本项目踩过 #dailyBox 的同一个坑）。
+    $('#view-en').addEventListener('click', async ev => {
+      const g = ev.target.closest('.en4-gate');
+      if (g) {
+        const uid = g.dataset.uid || '';
+        const un = uid && enBoard ? ((enBoard.units || []).filter(x => x.id === uid)[0] || {}).name : '';
+        openGate(g.dataset.gate, uid, un);
+        return;
+      }
+      if (ev.target.closest('#enReviewGo')) {
+        // 复习队列只取"到期"的那批，逐词过一遍；答对进位、答错明天再来。
+        let q;
+        try { q = (await api('/api/english/review' + (enUnit ? '?unitId=' + encodeURIComponent(enUnit) : ''))).queue; }
+        catch (e) { toast(e.message); return; }
+        if (!q || !q.items.length) { toast('现在没有要复习的词'); return; }
+        openReviewRun(q.items);
+      }
+    });
     $('#enDict').addEventListener('click', () => {
       openModal('听写模式', '<div class="pool-note">选一种练法。听音模式会用浏览器朗读，需要先点一下页面（浏览器要求先有交互才允许发声）。</div>' +
         Object.keys(EN_MODE_NAME).map(k => '<div class="pool-i" style="cursor:pointer" data-mode="' + k + '"><div class="pool-top"><b>' + EN_MODE_NAME[k] + '</b></div>' +

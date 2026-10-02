@@ -43,7 +43,11 @@ CREATE TABLE IF NOT EXISTS spaces (
   name          TEXT NOT NULL,
   name_key      TEXT NOT NULL,          -- 归一化后的姓名（trim+连续空格+小写），用于唯一性判断
   passcode      TEXT NOT NULL DEFAULT '',
-  tier          TEXT NOT NULL DEFAULT 'free',
+  -- 档位（批次25）：本空间能用哪一档技能。取值见 server/skills.js 的 TIER_KEYS：
+  --   self 自学（默认）/ guide 引导 / deep 深研 / all 通学
+  -- ⚠️ 老库里这里是 'free'（对标站时代的付费档名，已废弃）。
+  --    CREATE TABLE IF NOT EXISTS 不给已存在的表改默认值，所以靠 skills.migrateTiers() 归一。
+  tier          TEXT NOT NULL DEFAULT 'self',
   settings_json TEXT NOT NULL DEFAULT '{}',
   created_at    INTEGER NOT NULL,
   last_at       INTEGER NOT NULL DEFAULT 0
@@ -280,7 +284,9 @@ CREATE TABLE IF NOT EXISTS skills (
   subject       TEXT NOT NULL DEFAULT 'general',
   stage         TEXT NOT NULL DEFAULT 'all',
   category      TEXT NOT NULL DEFAULT 'subject',
-  required_tier TEXT NOT NULL DEFAULT 'free',
+  -- 这条技能要求的最低档位（批次25）。取值同 spaces.tier：self/guide/deep/all。
+  -- ⚠️ 老库里是 'free'，由 skills.migrateTiers() 归一到 'self'。
+  required_tier TEXT NOT NULL DEFAULT 'self',
   prompt        TEXT NOT NULL DEFAULT '',
   sort_order    INTEGER NOT NULL DEFAULT 0
 );
@@ -312,6 +318,25 @@ CREATE TABLE IF NOT EXISTS words (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_words_space ON words(space_id, unit_id);
+
+-- 英语复习（批次24）：艾宾浩斯间隔**与知识卡同一张表**（1/3/5/7 → 14 → 60 天）。
+-- 为什么这条落库而日报不落库：日报的系统侧事实**能**现算（从 activity 推）；
+-- 这里的连对次数是**有状态的累计量**，只能重放全部历史才算得出来 ——
+-- 它本质上是一条学习痕迹，和 card_reviews 同类。
+CREATE TABLE IF NOT EXISTS english_reviews (
+  id            TEXT PRIMARY KEY,
+  space_id      TEXT NOT NULL,
+  user_id       TEXT,
+  word_id       TEXT NOT NULL,
+  gate          TEXT NOT NULL DEFAULT '',   -- recognize | read | recall | use
+  result        TEXT NOT NULL,              -- right | wrong | unknown
+  consecutive   INTEGER NOT NULL DEFAULT 0, -- 这次之后连对了几次
+  interval_days INTEGER,                    -- 这次定下的间隔（unknown 时为 NULL）
+  next_due_at   INTEGER NOT NULL,
+  reviewed_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_enrev_word ON english_reviews(word_id, reviewed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_enrev_space ON english_reviews(space_id, next_due_at);
 
 -- 测评（P6）
 CREATE TABLE IF NOT EXISTS exams (

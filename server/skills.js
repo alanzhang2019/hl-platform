@@ -17,6 +17,55 @@
  */
 const D = require('./db');
 
+// ============================================================
+// 档位（批次25）：把对标站的"付费等级"改造成"空间授权"
+// ============================================================
+/* 为什么要做这件事：
+ *   对标站把技能锁在付费等级里（free 1 / basic 6 / camp 20 / pro 30），
+ *   本质是**卖功能**。我们的定位是自学工具，不做售卖（roadmap 明确"不做订阅/学币"）。
+ *   但"分层开放"这个机制本身有用 —— 一群孩子里，低年级不该一上来被 57 条方法淹没；
+ *   家长/老师希望先开放一批、用熟了再放更多。
+ *   ⇒ 所以保留分层，把**付费**换成**授权**：平台管理员给某个空间定档，学生只看到
+ *     ≤ 本空间档位的方法。钱从哪里来不是这个模块的事。
+ *
+ * 档位命名用中文意图，不用 free/pro —— 因为这里分的不是"用户身份高低"，
+ * 是"这套方法现在适不适合你"。四档（从小到大）：
+ *   自学（默认，人人可用）· 引导（需要 AI 配合追问的方法）· 深研（依赖学科功底的方法）· 通学（全部）
+ * ★ 这个阶梯**不是奖励**：它不会因为学得多而自动上升，只能由管理员授予。
+ *   「不用外部激励驱动学习」这条约束要求它不能被包装成"升级打怪"。
+ */
+const TIERS = [
+  { key: 'self',   name: '自学', rank: 0, note: '最基础的几条方法，人人可用' },
+  { key: 'guide',  name: '引导', rank: 1, note: '需要 AI 配合追问才用得起来的方法' },
+  { key: 'deep',   name: '深研', rank: 2, note: '依赖学科功底、给高年级用的方法' },
+  { key: 'all',    name: '通学', rank: 3, note: '全部 57 条方法' },
+];
+const TIER_KEYS = TIERS.map(t => t.key);
+const DEFAULT_TIER = 'self';
+/**
+ * 档位 → 序号。**认不出来的一律返回 -1（比最低档还低）**，不是 0。
+ *
+ * ★ 为什么不能返回 0：0 是「自学」的序号。若未知档也返回 0，则
+ *   `tierAllows('self', 某个拼错的要求档)` → `0 >= 0` → **true**。
+ *   后果是「越权放行」—— 库里 required_tier 被写坏（改名、手改、迁移漏了）
+ *   时，那条技能会对**最低档的空间**静默解锁，且列表上看起来完全正常（不 locked）。
+ *   失败要往「锁住」那一边倒，不能往「放行」那一边倒。
+ */
+function tierRank(key) {
+  const t = TIERS.filter(x => x.key === key)[0];
+  return t ? t.rank : -1;
+}
+function tierInfo(key) {
+  return TIERS.filter(x => x.key === key)[0] || TIERS[0];
+}
+/** 空间档位能不能用某条技能要求的档位。空/未知一律按**不放行**处理。 */
+function tierAllows(spaceTier, requiredTier) {
+  const have = tierRank(spaceTier);
+  const need = tierRank(requiredTier || DEFAULT_TIER);
+  if (have < 0 || need < 0) return false;   // 任一侧认不出来 → 锁住
+  return have >= need;
+}
+
 // category: method（通用方法）| subject（学科能力）| tool（工具）
 //
 // sort_order 的排法：**每个学科块占一个 100 宽的区间，块内步长 10**。
@@ -577,37 +626,150 @@ const REGISTRY = [
   },
 ];
 
+// ============================================================
+// 档位归属（批次25）：哪条方法属于哪一档
+// ============================================================
+/* 判据不是"这条重要不重要"，而是 **"没有 AI 配合，学生自己能不'用起来'"**：
+ *   self（自学）· 学生自己就能独立用的基础动作，不给任何引导也该会
+ *   guide（引导）· 需要 AI 一步步追问才成立的（对标"只反问、不答"，学生独自很难维持这个节奏）
+ *   deep（深研）· 依赖学科功底、写出来要专业训练才判得准的（证明书写、实验设计、材料分析）
+ *   all（通学）· 其余全部
+ * ★ 每条都必须落进某一档。**留空 = 默认 self**，所以"忘了配"不会把学生挡在外面。
+ *   这张表是**授权边界**，不是难度排行 —— 别拿它做"学完 X 才能解锁 Y"。
+ */
+const TIER_ASSIGN = {
+  // —— self：最基础、学生自己就能独立执行的动作 ——
+  feynman: 'self', 'mistake-review': 'self', 'self-test': 'self',
+  'spaced-review': 'self', 'tool-timer': 'self', 'tool-bedtime': 'self',
+  // —— guide：需要 AI 一步步追问才成立的方法 / 好上手的工具 ——
+  'concept-contrast': 'guide', 'mindmap-build': 'guide', 'question-training': 'guide',
+  'preview-questions': 'guide', 'error-cause': 'guide', 'socratic-chain': 'guide',
+  'analogy-build': 'guide', 'counter-example': 'guide', 'plan-first': 'guide',
+  'note-rewrite': 'guide', 'goal-split': 'guide', 'exam-review': 'guide',
+  'tool-explain-level': 'guide', 'tool-recall': 'guide', 'tool-quick-quiz': 'guide',
+  'tool-teach-other': 'guide',
+  // —— deep：依赖学科功底、判得准需要专业训练 ——
+  'math-modeling': 'deep', 'math-geometry': 'deep', 'math-number': 'deep',
+  'math-proof': 'deep', 'math-function': 'deep', 'math-equation': 'deep',
+  'math-solid': 'deep', 'math-pattern': 'deep', 'math-stats': 'deep',
+  'cn-writing': 'deep', 'cn-classical': 'deep', 'cn-words': 'deep', 'cn-idiom': 'deep',
+  'cn-summary': 'deep', 'cn-argument': 'deep', 'cn-recite': 'deep',
+  'en-grammar': 'deep', 'en-reading': 'deep', 'en-writing': 'deep',
+  'en-wordform': 'deep', 'en-translate': 'deep',
+  'sci-experiment': 'deep', 'sci-var-control': 'deep', 'sci-chem-eq': 'deep',
+  'sci-bio-map': 'deep', 'sci-physics': 'deep',
+  'soc-timeline': 'deep', 'soc-map': 'deep', 'soc-source': 'deep',
+  // —— all：其余（阅读/口语/拼写/听写/观察/数据等偏"练"的技能）——
+  'cn-reading': 'all', 'en-spelling': 'all', 'en-speaking': 'all', 'en-listening': 'all',
+  'sci-observe': 'all', 'sci-data': 'all',
+  // 兜底：以上没点名的，一律 self（见 tierOf）
+};
+
+/** 取某条技能应属的档位。没配的按最低档 —— 宁可放行，不误锁。 */
+function tierOf(id) {
+  const t = TIER_ASSIGN[id];
+  return TIER_KEYS.indexOf(t) >= 0 ? t : DEFAULT_TIER;
+}
+/** 校验档位表与注册表对齐：每条技能都要有明确归属，且不得有指向不存在技能的条目。
+ *  测试用它兜住"新增技能忘了配档位" —— 那种漏配会静默落进 self（＝对所有人开放），
+ *  属于"越权放行"，比漏配一个图标严重得多。 */
+function tierCoverage() {
+  const ids = REGISTRY.map(s => s.id);
+  const keys = Object.keys(TIER_ASSIGN);
+  return {
+    total: ids.length,
+    assigned: ids.filter(id => TIER_KEYS.indexOf(TIER_ASSIGN[id]) >= 0).length,
+    unassigned: ids.filter(id => TIER_KEYS.indexOf(TIER_ASSIGN[id]) < 0),
+    // TIER_ASSIGN 里写了、但 REGISTRY 里已经没有的（删技能后留下的孤儿，要清掉）
+    orphans: keys.filter(k => ids.indexOf(k) < 0),
+    byTier: TIER_KEYS.reduce((a, k) => { a[k] = ids.filter(id => TIER_ASSIGN[id] === k).length; return a; }, {}),
+  };
+}
+
 function seed() {
   const ins = 'INSERT INTO skills(id,display_name,icon_svg,description,subject,stage,category,required_tier,prompt,sort_order) ' +
     'VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET ' +
     'display_name=excluded.display_name, icon_svg=excluded.icon_svg, description=excluded.description, ' +
-    'subject=excluded.subject, category=excluded.category, prompt=excluded.prompt, sort_order=excluded.sort_order';
+    'subject=excluded.subject, category=excluded.category, required_tier=excluded.required_tier, ' +
+    'prompt=excluded.prompt, sort_order=excluded.sort_order';
   D.tx(() => {
     REGISTRY.forEach(s => D.run(ins, s.id, s.display_name, s.icon_svg || '', s.description || '',
-      s.subject || 'general', s.stage || 'all', s.category || 'subject', s.required_tier || 'free',
+      s.subject || 'general', s.stage || 'all', s.category || 'subject',
+      // 档位由 TIER_ASSIGN 决定；REGISTRY 里若显式写了 required_tier，以它为准（留个口子）
+      s.required_tier || tierOf(s.id),
       s.prompt || '', s.sort_order || 0));
   });
   return REGISTRY.length;
 }
 
+/** 迁移：旧库里 required_tier 可能是 'free'（老默认值，已不是合法档位）。
+ *  统一改写成 'self' —— 那是现在的最低档，语义等价（都是"人人可用"），
+ *  不改的话 tierRank('free')=0 恰好也等于 self，但存档里留一个不存在的档位名会误导后来人。 */
+function migrateTiers() {
+  D.run("UPDATE skills SET required_tier = ? WHERE required_tier IS NULL OR required_tier = '' OR required_tier = 'free'", DEFAULT_TIER);
+  D.run("UPDATE spaces SET tier = ? WHERE tier IS NULL OR tier = '' OR tier = 'free'", DEFAULT_TIER);
+}
+
+/** 取空间档位。空间不存在时按最低档（'self'）—— 不给未知空间放行。 */
+function spaceTier(spaceId) {
+  const r = D.get('SELECT tier FROM spaces WHERE id = ?', spaceId);
+  return (r && r.tier) || DEFAULT_TIER;
+}
+/** 由 auth 在管理员改档时调用 */
+function setSpaceTier(spaceId, tier) {
+  if (TIER_KEYS.indexOf(tier) < 0) { const e = new Error('没有这个档位'); e.code = 'BAD_TIER'; throw e; }
+  const r = D.get('SELECT id FROM spaces WHERE id = ?', spaceId);
+  if (!r) { const e = new Error('没有这个空间'); e.code = 'NOT_FOUND'; throw e; }
+  D.run('UPDATE spaces SET tier = ? WHERE id = ?', tier, spaceId);
+  return { spaceId: spaceId, tier: tier };
+}
+
+/**
+ * 列技能。**档位在这里生效**：超出本空间档位的技能带 locked:true，
+ * 且 enabled 一律为 false —— 一个"已锁定却显示为已启用"的卡片会让家长以为开了。
+ * opts.tier 只是给测试/管理端显式指定用的；正常路径自己查库，不信任调用方。
+ */
 function list(spaceId, opts) {
   const o = opts || {};
+  const myTier = o.tier || spaceTier(spaceId);
   const granted = {};
   D.all('SELECT skill_id FROM skill_grants WHERE space_id = ?', spaceId).forEach(r => { granted[r.skill_id] = 1; });
   let rows = D.all('SELECT * FROM skills ORDER BY sort_order ASC, id ASC');
   if (o.category && o.category !== 'all') rows = rows.filter(r => r.category === o.category);
   if (o.subject && o.subject !== 'all') rows = rows.filter(r => r.subject === o.subject);
-  return rows.map(r => ({
-    id: r.id, name: r.display_name, icon: r.icon_svg, description: r.description,
-    subject: r.subject, category: r.category, tier: r.required_tier,
-    enabled: !!granted[r.id],
-  }));
+  return rows.map(r => {
+    const req = r.required_tier || DEFAULT_TIER;
+    const locked = !tierAllows(myTier, req);
+    return {
+      id: r.id, name: r.display_name, icon: r.icon_svg, description: r.description,
+      subject: r.subject, category: r.category,
+      tier: req, tierName: tierInfo(req).name,
+      locked: locked,
+      // 锁定的技能永远显示"未启用" —— 授权被收回后，旧的 grant 记录不该再起作用
+      enabled: !locked && !!granted[r.id],
+      lockedNote: locked ? ('这个能力需要「' + tierInfo(req).name + '」，当前空间是「' + tierInfo(myTier).name + '」') : '',
+    };
+  });
 }
 
 function get(id) { return D.get('SELECT * FROM skills WHERE id = ?', id) || null; }
 
+/** 断言某技能对本空间可用（未锁定）。锁定 = 403 FORBIDDEN，不是静默忽略。 */
+function assertUnlocked(spaceId, id) {
+  const s = get(id);
+  if (!s) { const e = new Error('没有这个技能'); e.code = 'NOT_FOUND'; throw e; }
+  const req = s.required_tier || DEFAULT_TIER;
+  const myTier = spaceTier(spaceId);
+  if (!tierAllows(myTier, req)) {
+    const e = new Error('这个能力需要「' + tierInfo(req).name + '」，当前空间是「' + tierInfo(myTier).name + '」');
+    e.code = 'FORBIDDEN';
+    throw e;
+  }
+  return s;
+}
+
 function grant(spaceId, id) {
-  if (!get(id)) { const e = new Error('没有这个技能'); e.code = 'NOT_FOUND'; throw e; }
+  assertUnlocked(spaceId, id);
   D.run('INSERT OR IGNORE INTO skill_grants(space_id,skill_id,granted_at) VALUES(?,?,?)', spaceId, id, D.now());
   return list(spaceId);
 }
@@ -617,23 +779,40 @@ function revoke(spaceId, id) {
 }
 function setEnabled(spaceId, ids) {
   const want = Array.isArray(ids) ? ids.filter(x => typeof x === 'string') : [];
+  // 锁定的技能静默丢掉即可（批量接口，遇到一条越权就整批失败会让前端很难处理）；
+  // 但要**逐条校验**，不能只信前端传来的列表。
+  const allowed = want.filter(id => { const s = get(id); return s && tierAllows(spaceTier(spaceId), s.required_tier || DEFAULT_TIER); });
   D.tx(() => {
     D.run('DELETE FROM skill_grants WHERE space_id = ?', spaceId);
-    want.forEach(id => {
-      if (get(id)) D.run('INSERT OR IGNORE INTO skill_grants(space_id,skill_id,granted_at) VALUES(?,?,?)', spaceId, id, D.now());
+    allowed.forEach(id => {
+      D.run('INSERT OR IGNORE INTO skill_grants(space_id,skill_id,granted_at) VALUES(?,?,?)', spaceId, id, D.now());
     });
   });
   return list(spaceId);
 }
+/** 已启用的技能 id。**过滤掉已锁定的** —— 空间被降档后，旧授权必须立刻失效。 */
 function enabledIds(spaceId) {
-  return D.all('SELECT skill_id FROM skill_grants WHERE space_id = ? ORDER BY granted_at ASC', spaceId).map(r => r.skill_id);
+  const myTier = spaceTier(spaceId);
+  return D.all('SELECT skill_id FROM skill_grants WHERE space_id = ? ORDER BY granted_at ASC', spaceId)
+    .map(r => r.skill_id)
+    .filter(id => { const s = get(id); return s && tierAllows(myTier, s.required_tier || DEFAULT_TIER); });
 }
 /** 取启用技能的提示词片段，按 sort_order 稳定排序 */
 function promptsFor(spaceId, ids) {
   const want = Array.isArray(ids) && ids.length ? ids : enabledIds(spaceId);
+  const myTier = spaceTier(spaceId);
   const rows = want.map(get).filter(Boolean)
+    // ★ 显式传 ids 时也要过档位闸 —— 对话级技能（agentId）走的就是这条路，
+    //   不校验的话，学生拿一个被锁的技能 id 就能在对话里用上它。
+    .filter(r => tierAllows(myTier, r.required_tier || DEFAULT_TIER))
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
   return rows.map(r => r.prompt).filter(Boolean);
 }
 
-module.exports = { REGISTRY, seed, list, get, grant, revoke, setEnabled, enabledIds, promptsFor };
+module.exports = {
+  REGISTRY, seed, list, get, grant, revoke, setEnabled, enabledIds, promptsFor,
+  // 批次25：档位（授权模型）
+  TIERS, TIER_KEYS, DEFAULT_TIER, tierRank, tierInfo, tierAllows, tierOf,
+  spaceTier, setSpaceTier, migrateTiers, assertUnlocked,
+  TIER_ASSIGN, tierCoverage,
+};

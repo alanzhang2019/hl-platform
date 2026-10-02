@@ -680,9 +680,16 @@ async function sse(text, token, opts) {
   ok('技能带名称与说明', sk0.body.skills.every(s => s.name && s.description));
   ok('技能带分类', sk0.body.skills.some(s => s.category === 'method') && sk0.body.skills.some(s => s.category === 'subject'));
   ok('有费曼讲解技能', sk0.body.skills.some(s => s.id === 'feynman'));
-  // 全部免费 —— 这是和对标站最本质的差别（他们 56/57 锁在付费等级里）
-  ok('全部技能都是 free（不做付费解锁）', sk0.body.skills.every(s => s.tier === 'free'),
-    JSON.stringify(sk0.body.skills.map(s => s.tier).filter((v, i, a) => a.indexOf(v) === i)));
+  // 不付费 —— 这是和对标站最本质的差别（他们 56/57 锁在付费等级里）。
+  // ★ 批次25 改口径：「全员免费」→「按空间授权定档」。技能现在带 required_tier
+  //   （self/guide/deep/all），档位**只能由平台管理员授予**，不跟付费/学习时长挂钩。
+  //   所以这里断言的是「档位取值合法 + 不是付费档名」，不再是「全是 free」。
+  const LEGAL_TIERS = ['self', 'guide', 'deep', 'all'];
+  ok('技能档位取值合法（且不是 free/pro 这类付费档名）', sk0.body.skills.every(s => LEGAL_TIERS.indexOf(s.tier) >= 0),
+    JSON.stringify([...new Set(sk0.body.skills.map(s => s.tier))]));
+  ok('★ 不做付费解锁（无 free/pro/paid 档名）', sk0.body.skills.every(s => ['free', 'pro', 'paid', 'basic'].indexOf(s.tier) < 0),
+    JSON.stringify([...new Set(sk0.body.skills.map(s => s.tier))]));
+  ok('★ 每条技能都带档位信息（tierName + 是否 locked）', sk0.body.skills.every(s => s.tierName && typeof s.locked === 'boolean'));
   // 新增的 social 学科（道法/历史/地理）—— 计划 §6.2 提过但当时没做
   ok('覆盖 social 学科（历史/地理/道法）', sk0.body.skills.some(s => s.subject === 'social'),
     JSON.stringify(sk0.body.skills.map(s => s.subject).filter((v, i, a) => a.indexOf(v) === i)));

@@ -187,7 +187,11 @@ function dayOff(n) {
     chk('有「先存着」按钮', !!saveBtn);
     if (saveBtn) {
       await saveBtn.click();
-      await page.waitForTimeout(900);
+      // 等"确实存完了"：按钮从"保存中…"恢复，或 note 区已重渲染回来
+      await page.waitForFunction(() => {
+        const b = document.querySelector('#wNoteSave');
+        return !b || (!b.disabled && b.textContent.indexOf('保存中') < 0);
+      }, null, { timeout: 15000 }).catch(() => {});
       const stillDraft = await page.evaluate(() => {
         const sec = document.querySelector('#weeklyNoteSec');
         return sec ? sec.querySelectorAll('input[data-nk]').length : -1;
@@ -196,11 +200,19 @@ function dayOff(n) {
     }
 
     // ---- ④ 点历史条目 → 应该跳到那一段区间，并显示**已定稿只读** ----
+    // ★ 必须在**这一刻**重新取 handle：上面"先存着"会调 loadWeeklyHist()，
+    //   把 #weeklyHist 整块重建 —— 之前捕获的 ElementHandle 已经脱离了 DOM，
+    //   click() 会报 "Element is not attached to the DOM"（实测踩到）。
     const hist = await page.$('#weeklyHist .w-hist');
     chk('历史条目的元素存在', !!hist);
     if (hist) {
       await hist.click();
-      await page.waitForTimeout(1200);
+      // ★ 不用固定 sleep：机器吃紧时 1200ms 不够，会让"其实跳到了"被误判成"没反应"。
+      //   等真正的条件 —— 那一段的 note 已经渲染出来（#weeklyNoteSec 有内容且无骨架）。
+      await page.waitForFunction(() => {
+        const sec = document.querySelector('#weeklyNoteSec');
+        return sec && sec.innerHTML.trim().length > 0 && !sec.querySelector('.skel');
+      }, null, { timeout: 15000 }).catch(() => {});
       const afterJump = await page.evaluate(() => {
         const sec = document.querySelector('#weeklyNoteSec');
         return {
@@ -214,7 +226,15 @@ function dayOff(n) {
 
       // 跳回去（把这段截下来更完整）—— 点快捷按钮回到最近 7 天
       const q = await page.$('#weeklyBox .w-q');
-      if (q) { await q.click(); await page.waitForTimeout(900); }
+      if (q) {
+        await q.click();
+        // 等回到"最近 7 天"：note 区重新变成可编辑草稿态
+        await page.waitForFunction(() => {
+          const sec = document.querySelector('#weeklyNoteSec');
+          const inputs = sec ? sec.querySelectorAll('input[data-nk]').length : 0;
+          return inputs === 2 && !document.querySelector('#weeklyBox .skel');
+        }, null, { timeout: 15000 }).catch(() => {});
+      }
     }
 
     // ---- ⑤ 全页文本禁字 ----
@@ -223,6 +243,113 @@ function dayOff(n) {
       all.indexOf('NaN') < 0 && all.indexOf('undefined') < 0 && all.indexOf('null') < 0,
       { NaN: all.indexOf('NaN'), undefined: all.indexOf('undefined'), null: all.indexOf('null') });
     chk('没有"排名/百分位"这类编造的概念', all.indexOf('排名') < 0 && all.indexOf('百分位') < 0, null);
+
+    // ---- ⑤-b 数字溯源（批次22 前端接线）：点数字 → 明细真的出来 ----
+    // 这一段造过卡也复习过，所以 records / reviews / cards 都该是"算得出来"的 → 都可点。
+    const evBtns = await page.evaluate(() =>
+      Array.prototype.map.call(document.querySelectorAll('#weeklyBox [data-wm]'), b => b.dataset.wm));
+    chk('★ KPI 上有可点的溯源按钮（records/reviews/cards）',
+      evBtns.indexOf('records') >= 0 && evBtns.indexOf('reviews') >= 0 && evBtns.indexOf('cards') >= 0,
+      evBtns.join(','));
+    chk('★ 明细容器 #weeklyEv 在页面里就建好了（不靠点击才出现）',
+      await page.evaluate(() => !!document.querySelector('#weeklyEv')), null);
+    chk('★ 容器初始是收起的（不占高度）',
+      await page.evaluate(() => {
+        const b = document.querySelector('#weeklyEv');
+        return b ? (b.dataset.open === '0' && b.getBoundingClientRect().height === 0) : false;
+      }), null);
+    // ★ 数字与「明细」不能重叠（实测第一版把下划线画在整按钮上 ⇒ 两者挤同一行重叠）。
+    //   判据：明细的 top 必须 >= 数字的 bottom - 1（留 1px 给亚像素）。
+    const kpiOverlap = await page.evaluate(() => {
+      const bad = [];
+      document.querySelectorAll('#weeklyBox .w-ev-btn').forEach(b => {
+        const v = b.querySelector('.w-ev-v'), i = b.querySelector('.w-ev-i');
+        if (!v || !i) return;
+        if (i.getBoundingClientRect().top < v.getBoundingClientRect().bottom - 1) {
+          bad.push(b.dataset.wm + ':' + Math.round(i.getBoundingClientRect().top - v.getBoundingClientRect().bottom));
+        }
+      });
+      return bad;
+    });
+    chk('★★ 数字与「明细」没有重叠', kpiOverlap.length === 0, kpiOverlap);
+
+    // 点「练知识卡」的次数数字
+    const reviewsBtn = await page.$('#weeklyBox [data-wm="reviews"]');
+    chk('「练知识卡」数字可点', !!reviewsBtn);
+    if (reviewsBtn) {
+      await reviewsBtn.click();
+      await page.waitForFunction(() => {
+        const b = document.querySelector('#weeklyEv');
+        return b && b.dataset.open === '1' && !b.querySelector('.skel');
+      }, null, { timeout: 8000 }).catch(() => {});
+      const evTxt = await page.evaluate(() => (document.querySelector('#weeklyEv') || {}).innerText || '');
+      chk('★★ 点开后明细真的出来了（不是空壳）', evTxt.length > 10, evTxt.slice(0, 80));
+      chk('★ 明细标题写了条数', /练知识卡 · \d+ 条/.test(evTxt), evTxt.slice(0, 60));
+      chk('★ 明细按天分组（每组的日期是 MM-DD 形态）', /^\d{2}-\d{2} · \d+ 条/m.test(evTxt), evTxt.slice(0, 120));
+    chk('★ 明细里能看到练习的科目/对错', /答对|答错|判不出对错/.test(evTxt), evTxt.slice(0, 160));
+
+      // 点 × 收起
+      const x = await page.$('#weeklyEv .w-ev-x');
+      chk('明细有收起按钮', !!x);
+      if (x) {
+        await x.click();
+        await page.waitForFunction(() => { const b = document.querySelector('#weeklyEv'); return b && b.dataset.open === '0' && b.innerHTML.trim() === ''; }, null, { timeout: 8000 }).catch(() => {});
+        chk('★ 点 × 后收起且清空',
+          await page.evaluate(() => {
+            const b = document.querySelector('#weeklyEv');
+            return b ? (b.dataset.open === '0' && b.innerHTML.trim() === '') : false;
+          }), null);
+      }
+      // 再点同一个 → 应能再次打开（toggle 不能把自己锁死）
+      await reviewsBtn.click();
+      await page.waitForFunction(() => (document.querySelector('#weeklyEv') || {}).dataset && document.querySelector('#weeklyEv').dataset.open === '1' && !document.querySelector('#weeklyEv').querySelector('.skel'), null, { timeout: 8000 }).catch(() => {});
+      chk('★ 收起后还能再次打开',
+        await page.evaluate(() => (document.querySelector('#weeklyEv') || {}).dataset.open === '1'), null);
+      // 换个指标（records）→ 内容应换成记录，不是缓存着上一次的
+      const recBtn = await page.$('#weeklyBox [data-wm="records"]');
+      if (recBtn) {
+        await recBtn.click();
+        await page.waitForFunction(() => { const b = document.querySelector('#weeklyEv'); return b && b.dataset.ev === 'records' && !b.querySelector('.skel') && b.innerText.indexOf('留下的记录') >= 0; }, null, { timeout: 8000 }).catch(() => {});
+        const ev2 = await page.evaluate(() => (document.querySelector('#weeklyEv') || {}).innerText || '');
+        chk('★ 换成另一个指标后明细跟着换（不是缓存上一次的）',
+          /留下的记录/.test(ev2), ev2.slice(0, 60));
+      }
+      // 收起，免得影响后面的溢出断言与截图
+      const x2 = await page.$('#weeklyEv .w-ev-x');
+      if (x2) { await x2.click(); await page.waitForFunction(() => { const b = document.querySelector('#weeklyEv'); return b && b.dataset.open === '0'; }, null, { timeout: 8000 }).catch(() => {}); }
+    }
+
+    // ---- ⑤-c 与上一段对比（批次22-②）：要点是"不许红绿、不许当 0 比" ----
+    const cmpTxt = await page.evaluate(() => {
+      const sec = Array.prototype.filter.call(document.querySelectorAll('#weeklyBox .w-sec'),
+        s => /和上一段比/.test(s.innerText))[0];
+      return sec ? sec.innerText : '';
+    });
+    chk('★ 页面上有「和上一段比」这一块', cmpTxt.length > 0, cmpTxt.slice(0, 60));
+    chk('★ 对比块标出了上一段的日期区间', /\d{4}-\d{2}-\d{2} ~ \d{4}-\d{2}-\d{2}/.test(cmpTxt), cmpTxt.slice(0, 80));
+    chk('★ 对比块明说"不说明学得好坏"', /不说明学得好坏|不代表/.test(cmpTxt), cmpTxt.slice(0, 200));
+    // ★★ 不给红绿：up / down 两种 delta 的**计算色**必须相同
+    const cmpColors = await page.evaluate(() => {
+      const out = {};
+      ['w-cmp-up', 'w-cmp-down', 'w-cmp-flat', 'w-cmp-na'].forEach(c => {
+        const el = document.querySelector('#weeklyBox .' + c);
+        out[c] = el ? getComputedStyle(el).color : null;
+      });
+      return out;
+    });
+    if (cmpColors['w-cmp-up'] && cmpColors['w-cmp-down']) {
+      chk('★★ up 与 down 的计算颜色相同（不红不绿）',
+        cmpColors['w-cmp-up'] === cmpColors['w-cmp-down'],
+        { up: cmpColors['w-cmp-up'], down: cmpColors['w-cmp-down'] });
+    } else {
+      chk('★ 本夹具里没有同时出现 up/down（跳过颜色对比，不算失败）', true, cmpColors);
+    }
+    // ★ 没有 ❌ 红绿箭头图标
+    chk('★ 对比里没有用箭头符号表达好坏', !/[↑↓▲▼]/.test(cmpTxt), cmpTxt.slice(0, 100));
+    // ★ 「没法比」与「一样」是两个词，不混用
+    const hasNa = /没法比/.test(cmpTxt), hasFlat = /和上一次一样/.test(cmpTxt);
+    chk('★ 「没法比」与「一样」用的是不同措辞（不混为一档）',
+      !(hasNa && hasFlat) || cmpTxt.indexOf('没法比') !== cmpTxt.indexOf('和上一次一样'), { hasNa, hasFlat });
 
     // ---- ⑥ 横向溢出：逐元素量 right 边界 ----
     const overflow = await page.evaluate((vw) => {

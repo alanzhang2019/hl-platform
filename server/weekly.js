@@ -17,6 +17,65 @@ const daily = require('./daily');
 const DAY = 24 * 60 * 60 * 1000;
 const MAX_DAYS = 7;
 
+/**
+ * ★ 与上一个同长窗口的对比（批次22-②）。
+ *
+ * 三条必须守住的规矩：
+ *  ① **不落库** —— 每次现算。上一个窗口的数字同样来自 daily.facts，不存快照。
+ *  ② **null 不许当 0 比** —— accuracy 是"判得出对错才有比例"。
+ *     本周 null 或上周 null 时，delta **必须是 null**，并给出 why；
+ *     把 null 当 0 算差会得出"从 0% 涨到 50%"这种凭空捏造的结论。
+ *  ③ **不评好坏** —— 只给 direction（up/down/flat），不给红绿、不给"进步/退步"。
+ *     记录多不等于学得好（这条写在 limits 里），所以"多"不是"好"，
+ *     前端也刻意不做颜色箭头（那是打分，家长端也不做）。
+ *
+ * 上一个窗口 = 与本周**等长**、紧挨着在它前面的那一段。
+ * 不用"自然周"是因为用户可能选任意 7 天窗口，等长紧邻才是唯一正确的对照。
+ */
+function compareWindows(spaceId, fromTs, toTs) {
+  const len = Math.round((toTs - fromTs) / DAY) + 1;
+  const prevToTs = fromTs - DAY;
+  const prevFromTs = prevToTs - (len - 1) * DAY;
+
+  const collect = (a, b) => {
+    const list = [];
+    let cur = a;
+    while (cur <= b) { list.push(daily.facts(spaceId, daily.dayKey(cur))); cur += DAY; }
+    return computeSummary(list);
+  };
+
+  const cur = collect(fromTs, toTs);
+  const prev = collect(prevFromTs, prevToTs);
+
+  /** delta 的安全算法：任一侧为 null ⇒ 老实说"没法比"，不给数字 */
+  const d = (cv, pv) => {
+    if (cv === null || cv === undefined || pv === null || pv === undefined) {
+      return { delta: null, direction: 'unknown', why: '上一次这个数算不出来，没法比' };
+    }
+    const delta = cv - pv;
+    return { delta, direction: delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat', why: null };
+  };
+
+  const metrics = {
+    records: Object.assign({ this: cur.records, last: prev.records }, d(cur.records, prev.records)),
+    reviews: Object.assign({ this: cur.reviews, last: prev.reviews }, d(cur.reviews, prev.reviews)),
+    accuracy: Object.assign({ this: cur.accuracy, last: prev.accuracy }, d(cur.accuracy, prev.accuracy)),
+    cardsTouched: Object.assign({ this: cur.cardsTouched, last: prev.cardsTouched }, d(cur.cardsTouched, prev.cardsTouched)),
+  };
+  // 有一个指标的 delta 是 null（没得比）就在顶层标一下，前端好统一提示
+  const comparable = Object.keys(metrics).every(k => metrics[k].delta !== null);
+
+  return {
+    prevFrom: daily.dayKey(prevFromTs),
+    prevTo: daily.dayKey(prevToTs),
+    daysCount: len,
+    metrics,
+    comparable,
+    // ★ 每个 delta 都带一句"这个数只说明什么"，避免"多了就是好"的误读
+    note: '对比只看"痕迹的多少"，不说明学得好坏 —— 记录多了可能只是这周多记了几笔。',
+  };
+}
+
 function build(spaceId, from, to) {
   const fromTs = daily.parseDay(from);
   const toTs = daily.parseDay(to);
@@ -57,6 +116,7 @@ function build(spaceId, from, to) {
     isCurrentWeek: isCurrentWeek(fromTs, toTs),
     summary,
     coverage,
+    compare: compareWindows(spaceId, fromTs, toTs),
     days,
     notScored: weeklyNotScored(factsList),
     limits: weeklyLimits(),
@@ -372,6 +432,6 @@ function history(spaceId, limit) {
 }
 
 module.exports = {
-  build, history, getNote, saveDraft, finalize, evidenceByMetric,
+  build, history, getNote, saveDraft, finalize, evidenceByMetric, compareWindows,
   WEEK_QUESTIONS, WEEK_KEYS, MAX_DAYS,
 };

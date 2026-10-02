@@ -63,11 +63,12 @@ const skills = require('./server/skills');
 const kb = require('./server/kb');
 const english = require('./server/english');
 const exam = require('./server/exam');
+const growth = require('./server/growth');
 const pool = require('./server/pool');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-02-parity24';
+const APP_VERSION = '2026-10-02-parity26';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -451,7 +452,7 @@ async function handleApi(req, res, u) {
       ok: true, version: APP_VERSION,
       apis: ['auth', 'sms', 'docs', 'avatars', 'session', 'announcements', 'spaces', 'chat', 'stream',
         'messages', 'tts', 'translate', 'favorites', 'upload', 'tempdocs', 'jobs', 'agents', 'search', 'shares',
-        'projects', 'memory', 'share', 'cards', 'flashcards', 'pet', 'skills', 'kb', 'dashboard', 'daily', 'weekly', 'parent', 'english', 'exam', 'pool'],
+        'projects', 'memory', 'share', 'cards', 'flashcards', 'pet', 'skills', 'kb', 'dashboard', 'daily', 'weekly', 'parent', 'english', 'exam', 'growth', 'pool'],
       mockLLM: llm.isMock(),
       adminPanel: !!ADMIN_PASSWORD,
     });
@@ -620,6 +621,26 @@ async function handleApi(req, res, u) {
     if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });
     if (!ADMIN_TOKENS.has(reqToken(req))) return sendJSON(res, 401, { error: 'NO_AUTH' });
     return sendJSON(res, 200, { ok: true, announcements: account.listAnnouncements('_public', null, {}) });
+  }
+
+  // 管理员改空间档位（批次25：能力中心的"授权"，替代对标站的付费等级）
+  const admTierM = p.match(/^\/api\/admin\/spaces\/([^/]+)\/tier$/);
+  if (admTierM && method === 'POST') {
+    if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });
+    if (!ADMIN_TOKENS.has(reqToken(req))) return sendJSON(res, 401, { error: 'NO_AUTH' });
+    const sid = decodeURIComponent(admTierM[1]);
+    const b = await readBody(req);
+    try { return sendJSON(res, 200, { ok: true, space: skills.setSpaceTier(sid, b.tier), tiers: skills.TIERS }); }
+    catch (e) { return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { error: e.code || 'BAD_INPUT', message: e.message }); }
+  }
+  // 管理员查看所有空间的档位（管理面板用）
+  if (p === '/api/admin/skill-tiers' && method === 'GET') {
+    if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });
+    if (!ADMIN_TOKENS.has(reqToken(req))) return sendJSON(res, 401, { error: 'NO_AUTH' });
+    const spaces = auth.listSpaces().map(s => ({
+      id: s.spaceId, name: s.name, tier: skills.spaceTier(s.spaceId),
+    }));
+    return sendJSON(res, 200, { ok: true, tiers: skills.TIERS, spaces: spaces });
   }
 
   // ---------- 以下都需要登录 ----------
@@ -1194,6 +1215,9 @@ async function handleApi(req, res, u) {
       ok: true,
       skills: skills.list(sid, { category: u.searchParams.get('category') || 'all', subject: u.searchParams.get('subject') || 'all' }),
       enabled: skills.enabledIds(sid),
+      // 本空间档位 + 档位阶梯：前端要拿它显示"这条什么时候能用"
+      tier: skills.spaceTier(sid),
+      tiers: skills.TIERS,
     });
   }
   if (p === '/api/skills/enabled' && method === 'POST') {
@@ -1205,7 +1229,11 @@ async function handleApi(req, res, u) {
     try {
       if (method === 'POST') return sendJSON(res, 200, { ok: true, skills: skills.grant(sid, skm[1]), enabled: skills.enabledIds(sid) });
       if (method === 'DELETE') return sendJSON(res, 200, { ok: true, skills: skills.revoke(sid, skm[1]), enabled: skills.enabledIds(sid) });
-    } catch (e) { return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { error: e.code, message: e.message }); }
+    } catch (e) {
+      // 锁定 = 403（越权），不是 400（参数写错）—— 前端靠这个区分"该升级档位"和"点错了"
+      const st = e.code === 'NOT_FOUND' ? 404 : (e.code === 'FORBIDDEN' ? 403 : 400);
+      return sendJSON(res, st, { error: e.code, message: e.message });
+    }
   }
 
   // ---------- 知识库（P2）----------
@@ -1370,10 +1398,57 @@ async function handleApi(req, res, u) {
     return sendJSON(res, 200, { ok: true, ...english.compareSpeech(b.target, b.heard) });
   }
 
+  // ---------- 英语：单元四关 + 艾宾浩斯（批次24）----------
+  // ★ 四关的"过了几个词"全部现算（落在 words.right_count 上），进度不落库。
+  // 见 server/english.js 头部「单元四关」一节。
+  if (p === '/api/english/board' && method === 'GET') {
+    return sendJSON(res, 200, { ok: true, ...english.unitBoard(sid) });
+  }
+  const eug = p.match(/^\/api\/english\/units\/([^/]+)\/progress$/);
+  if (eug && method === 'GET') {
+    const r = english.unitProgress(sid, decodeURIComponent(eug[1]));
+    if (!r) return sendJSON(res, 404, { error: '单元不存在' });
+    return sendJSON(res, 200, { ok: true, progress: r });
+  }
+  if (p === '/api/english/gate' && method === 'GET') {
+    const g = u.searchParams.get('gate') || 'recognize';
+    try {
+      return sendJSON(res, 200, { ok: true, ...english.gateTasks(sid, u.searchParams.get('unitId') || null, g, {
+        count: u.searchParams.get('count'),
+      }) });
+    } catch (e) { return sendJSON(res, 400, { error: e.message, code: e.code || 'BAD_INPUT' }); }
+  }
+  if (p === '/api/english/gate/grade' && method === 'POST') {
+    const b = await readBody(req);
+    try {
+      return sendJSON(res, 200, { ok: true, ...english.gradeGate(sid, ctx.userId, {
+        gate: b.gate, items: b.items, createCards: b.createCards !== false,
+      }) });
+    } catch (e) { return sendJSON(res, 400, { error: e.message, code: e.code || 'BAD_INPUT' }); }
+  }
+  if (p === '/api/english/review' && method === 'GET') {
+    return sendJSON(res, 200, { ok: true, queue: english.reviewQueue(sid, {
+      unitId: u.searchParams.get('unitId') || null,
+      count: u.searchParams.get('count'),
+    }), stats: english.reviewStats(sid, u.searchParams.get('unitId') || null) });
+  }
+  if (p === '/api/english/review' && method === 'POST') {
+    const b = await readBody(req);
+    try {
+      return sendJSON(res, 200, { ok: true, ...english.recordReview(sid, ctx.userId, {
+        wordId: b.wordId, gate: b.gate, result: b.result,
+      }) });
+    } catch (e) { return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { error: e.message, code: e.code || 'BAD_INPUT' }); }
+  }
+
   // ---------- 测评（P6）----------
   // 出卷不下发答案；交卷后每题回流知识卡 —— 见 server/exam.js 头部。
   if (p === '/api/exams/breakdown' && method === 'GET') {
     return sendJSON(res, 200, { ok: true, subjects: exam.subjectBreakdown(sid) });
+  }
+  // 7 阶段成长画像（批次22-③）：全部现算、不落库、不评分。见 server/growth.js 头部。
+  if (p === '/api/growth' && method === 'GET') {
+    return sendJSON(res, 200, { ok: true, portrait: growth.portrait(sid) });
   }
   if (p === '/api/exams' && method === 'GET') {
     return sendJSON(res, 200, { ok: true, exams: exam.listExams(sid, { projectId: u.searchParams.get('projectId') || undefined }) });
@@ -1499,6 +1574,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 auth.ensureDefaultSpace();
+skills.migrateTiers();   // 把旧的 required_tier='free' 归一到现行最低档（批次25 换过档位名）
 skills.seed();   // 技能注册表是代码里的常量，每次启动同步进库（幂等）
 chat.startWorker();   // AI 配图 / 互动课堂等异步任务的调度器（定时器已 unref，不拦测试退出）
 

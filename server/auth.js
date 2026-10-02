@@ -79,8 +79,8 @@ function nextSpaceId() {
 function ensureDefaultSpace() {
   const has = D.get('SELECT 1 FROM spaces WHERE id = ?', '_public');
   if (has) return;
-  D.run('INSERT INTO spaces(id,name,name_key,passcode,created_at,last_at) VALUES(?,?,?,?,?,?)',
-    '_public', '默认空间', D.nameKey('默认空间'), '', D.now(), D.now());
+  D.run('INSERT INTO spaces(id,name,name_key,passcode,tier,created_at,last_at) VALUES(?,?,?,?,?,?,?)',
+    '_public', '默认空间', D.nameKey('默认空间'), '', 'self', D.now(), D.now());
 }
 
 function createSpace({ name, passcode }) {
@@ -88,8 +88,10 @@ function createSpace({ name, passcode }) {
   if (nameTaken(nm, null)) throw nameTakenError(nm);
   const id = nextSpaceId();
   try {
-    D.run('INSERT INTO spaces(id,name,name_key,passcode,created_at,last_at) VALUES(?,?,?,?,?,?)',
-      id, nm, D.nameKey(nm), String(passcode || '').trim(), D.now(), D.now());
+    // 显式写 tier：不写的话取的是 schema 默认值，而老库的默认值可能是已废弃的 'free'。
+    // 新空间一律从最低档开始，由管理员按需授予。见 server/skills.js 的 DEFAULT_TIER。
+    D.run('INSERT INTO spaces(id,name,name_key,passcode,tier,created_at,last_at) VALUES(?,?,?,?,?,?,?)',
+      id, nm, D.nameKey(nm), String(passcode || '').trim(), 'self', D.now(), D.now());
   } catch (e) {
     // 唯一索引兜底：nameTaken 用的是"当前规则重算"，而索引比的是"入库时算出的 key"，
     // 历史数据两者可能不一致。撞到唯一约束时统一转成 NAME_TAKEN，别漏成 500。

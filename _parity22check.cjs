@@ -435,6 +435,99 @@ group('J. 递归扫：返回结构里不许出现 undefined（JSON.stringify 会
 }
 
 // ============================================================
+group('M. ★ 与上一段对比：null 不许当 0 比、不给红绿、不评价好坏');
+{
+  const b = weekly.build(SID, FROM, TO);
+  const cmp = b.compare;
+  ok('M1 build() 带上了 compare', !!cmp, !!cmp);
+
+  // 上一段 = 与本周等长、紧挨着在它前面的那一段（不是"自然周"）
+  const expectPrevTo = dayOff(-7);
+  const expectPrevFrom = dayOff(-13);
+  ok('M2 上一段是紧邻的等长窗口', cmp.prevFrom === expectPrevFrom && cmp.prevTo === expectPrevTo,
+    cmp.prevFrom + '~' + cmp.prevTo);
+  ok('M3 上一段天数与这一段相同', cmp.daysCount === b.daysCount, cmp.daysCount + ' vs ' + b.daysCount);
+
+  // 本周有数据、上一段为空 ⇒ 每个指标都要能算出 delta（上一段是"0 有数据"不是"null"）
+  const m = cmp.metrics;
+  ok('M4 records.this 与本段 summary 一致', m.records['this'] === b.summary.records,
+    m.records['this'] + ' vs ' + b.summary.records);
+  ok('M5 records.last 是上一段的（本夹具里为 0）', m.records.last === 0, m.records.last);
+  ok('M6 records.delta = this - last', m.records.delta === m.records['this'] - m.records.last, m.records);
+
+  // ★★ 核心：accuracy 两侧都是"判不出对错"时，delta 必须是 null（不许当 0）
+  //   造一个两段都没有判得出对错的场景
+  const SID2 = 'sp_p22_cmp_null';
+  addCard(SID2, -20, 'math');   // 只建卡、不复习 ⇒ reviews 0、judged 0
+  addCard(SID2, -1, 'math');
+  const b2 = weekly.build(SID2, dayOff(-6), dayOff(0));
+  ok('M7 两段都算不出 accuracy 时 this/last 都是 null',
+    b2.compare.metrics.accuracy['this'] === null && b2.compare.metrics.accuracy.last === null,
+    b2.compare.metrics.accuracy);
+  ok('M8 ★★ accuracy 两侧 null ⇒ delta 是 null 而不是 0',
+    b2.compare.metrics.accuracy.delta === null, b2.compare.metrics.accuracy.delta);
+  ok('M9 ★★ delta 为 null 时 direction 必须是 unknown（不能是 flat）',
+    b2.compare.metrics.accuracy.direction === 'unknown', b2.compare.metrics.accuracy.direction);
+  ok('M10 ★★ 给出"为什么没法比"的说明，不留下空白', !!b2.compare.metrics.accuracy.why,
+    b2.compare.metrics.accuracy.why);
+  ok('M11 有指标不可比时 comparable=false', b2.compare.comparable === false, b2.compare.comparable);
+
+  // ★ 一侧 null 一侧有值 ⇒ 仍然不许比（这才是最容易出错的地方）
+  const SID3 = 'sp_p22_cmp_mix';
+  {
+    const c = addCard(SID3, -10, 'math');
+    addReview(c, -10, 'right', 10);      // 上一段有判得出对错的
+    addCard(SID3, -1, 'math');           // 本段只有建卡、没复习 ⇒ accuracy null
+  }
+  const b3 = weekly.build(SID3, dayOff(-6), dayOff(0));
+  ok('M12 ★★ 一侧 null 一侧有值 ⇒ delta 仍是 null（不比）',
+    b3.compare.metrics.accuracy.delta === null, b3.compare.metrics.accuracy);
+  ok('M13 此时 this 是 null、last 有值（两侧都如实给出）',
+    b3.compare.metrics.accuracy['this'] === null && b3.compare.metrics.accuracy.last === 100,
+    b3.compare.metrics.accuracy);
+
+  // 正常可比的：records 两侧都有 ⇒ delta 是真数字
+  ok('M14 两侧都有数时 delta 是数字', typeof m.records.delta === 'number', typeof m.records.delta);
+  ok('M15 direction 只能是 up/down/flat/unknown',
+    ['up', 'down', 'flat', 'unknown'].indexOf(m.records.direction) >= 0, m.records.direction);
+
+  // ★ 不许评价好坏：note 里必须明说"不说明学得好坏"
+  ok('M16 ★ 对比附带的说明明说"不代表学得好坏"',
+    /不说明学得好坏|不代表/.test(cmp.note || ''), cmp.note);
+
+  // ★★ 反证友好：compare 也必须现算（删掉 weekly_reports 不影响它）
+  const before = JSON.stringify(weekly.build(SID, FROM, TO).compare);
+  D.run('DELETE FROM weekly_reports WHERE space_id = ?', SID);
+  const after = JSON.stringify(weekly.build(SID, FROM, TO).compare);
+  ok('M17 ★★ compare 现算：删掉 weekly_reports 后一字节不变', before === after, { before: before.slice(0, 60), after: after.slice(0, 60) });
+}
+
+// ============================================================
+group('N. 静态：对比的"不给红绿、不给好坏"必须写死在前端');
+{
+  const app = fs.readFileSync(path.join(__dirname, 'public/js/app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, 'public/app.css'), 'utf8');
+  const cmpStart = app.indexOf('function renderCompare');
+  const cmpFn = cmpStart >= 0 ? app.slice(cmpStart, app.indexOf('function renderWeekly', cmpStart)) : '';
+  ok('N1 前端有 renderCompare', cmpFn.length > 100, cmpFn.length);
+  ok('N2 ★ 前端在 delta 为 null 时给的是"没法比"，不是 0 或空',
+    /m\.delta === null[\s\S]{0,160}没法比/.test(cmpFn));
+  ok('N3 ★ 前端不出现"进步/退步/优秀/退步了"这类评价词',
+    !/进步|退步|优秀|变好|变差/.test(cmpFn), 'found eval word');
+  ok('N4 ★★ CSS 里 up 与 down 用同一个颜色（不红不绿）',
+    /\.w-cmp-up, \.w-cmp-down \{ color: var\(--pri\)/.test(css));
+  ok('N5 ★ "没法比"(na) 与"一样"(flat) 是两档不同样式',
+    /\.w-cmp-flat \{ color: var\(--dim2\)/.test(css) && /\.w-cmp-na \{ color: var\(--dim2\)/.test(css) &&
+    css.indexOf('.w-cmp-na') !== css.indexOf('.w-cmp-flat'));
+  // ★ 对比块也必须在第一个 @media 之前
+  const cmpCss = css.indexOf('.w-cmp-row');
+  const firstMedia = css.search(/(^|\n)\s*@media/);
+  ok('N6 对比样式写在第一个 @media 之前', cmpCss > 0 && cmpCss < firstMedia, 'cmp@' + cmpCss + ' media@' + firstMedia);
+  ok('N7 前端对比的四个指标与后端 metrics 键逐一对齐',
+    ['records', 'reviews', 'accuracy', 'cardsTouched'].every(k => cmpFn.indexOf("'" + k + "'") >= 0));
+}
+
+// ============================================================
 console.log('\n' + '─'.repeat(60));
 if (fail) {
   console.log('✗ 失败 ' + fail + ' 项：');

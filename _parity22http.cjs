@@ -335,6 +335,38 @@ function backdateReviews(from, to) {
       (await GET('/api/weekly/note?from=' + curFrom + '&to=' + curTo, tokA)).body.note.answers.noticed === '这是本周写的，不该出现在历史里',
       '读不到');
 
+    // ---------- 10c. 与上一段对比（HTTP 层）----------
+    group('10c. ★ 与上一段对比：null 不许当 0 比（HTTP 层也守）');
+    {
+      // 用真 token 走真实接口造一段"上一段有判得出对错的练习、这一段没有"的场景。
+      // 直接建卡不复习是做不到的（接口会回写 reviewed_at 为"现在"），
+      // 所以这里用 backdate 把上一段的复习挪进目标区间。
+      const cA = await POST('/api/cards', { knowledge: '对比用卡', question: 'q', answer: 'a', type: 'choice', subject: 'math' }, tokB);
+      const cidA = cA.body && cA.body.card && cA.body.card.id;
+      if (cidA) {
+        await POST('/api/cards/' + cidA + '/review', { result: 'right', studentAnswer: 'x' }, tokB);
+        // 把这次复习挪进"上一段"（dayOff(-13) ~ dayOff(-7)）
+        backdateReviews(dayOff(-13), dayOff(-7));
+      }
+      // 这一段（最近 7 天）：只有建卡、不复习 ⇒ accuracy 算不出来
+      const cmpW = await GET('/api/weekly?from=' + dayOff(-6) + '&to=' + TODAY, tokB);
+      const cm = cmpW.body.report.compare;
+      ok('★ HTTP 返回里带上了 compare', !!cm && !!cm.metrics, !!cm);
+      ok('★ compare 给出了上一段的日期区间',
+        !!cm.prevFrom && !!cm.prevTo && cm.prevFrom < cm.prevTo, cm.prevFrom + '~' + cm.prevTo);
+      ok('★★ 这一段 accuracy 算不出来时，对比里也是 null（不给数字）',
+        cm.metrics.accuracy['this'] === null, cm.metrics.accuracy['this']);
+      ok('★★ accuracy 一侧 null ⇒ delta 是 null 且 direction=unknown（HTTP 层不许补 0）',
+        cm.metrics.accuracy.delta === null && cm.metrics.accuracy.direction === 'unknown',
+        cm.metrics.accuracy);
+      ok('★ 对比的 note 明说"不说明学得好坏"', /不说明学得好坏|不代表/.test(cm.note || ''), cm.note);
+      // ★ 对比也不落库：读两次一字节不变
+      const c1 = await GET('/api/weekly?from=' + dayOff(-6) + '&to=' + TODAY, tokB);
+      const c2 = await GET('/api/weekly?from=' + dayOff(-6) + '&to=' + TODAY, tokB);
+      ok('★ 连读两次 compare 完全一致（现算、无副作用）',
+        JSON.stringify(c1.body.report.compare) === JSON.stringify(c2.body.report.compare), '不一致');
+    }
+
     // ---------- 11. 幂等 ----------
     group('11. 读接口连打多次结果一致（没有隐藏的写副作用）');
     const r1 = await GET('/api/weekly/history', tokA);
