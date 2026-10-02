@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-font="md">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>后浪学习平台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%232563EB'/><path d='M9 20c3-8 11-8 14 0' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round'/></svg>">
+<script>
+/* 首屏防闪色：在样式表之前同步恢复主题与字号，避免白屏跳变 */
+(function () {
+  try {
+    var t = localStorage.getItem('hl_theme'); if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+    var f = localStorage.getItem('hl_font'); if (f) document.documentElement.setAttribute('data-font', f);
+  } catch (e) {}
+})();
+</script>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<!-- ============ 空间门 ============ -->
+<div class="land" id="land">
+  <div class="land-bg" aria-hidden="true"><canvas id="landCanvas"></canvas></div>
+  <div class="land-col">
+
+    <!-- ★ 品牌抬头：从卡片里提出来，让第一屏先回答「这是谁」。
+         为什么不做成全屏 hero：我们的落地页是**功能入口**，不是营销页。
+         学生打开它是为了立刻开始，不是来听我们讲理念的 —— 讲一句就够了。 -->
+    <header class="land-head">
+      <div class="land-logo">后浪奔涌</div>
+      <div class="land-sub">AI 学习平台 · 自学立身，创造立世</div>
+      <p class="land-stance">不直接给答案 —— 陪你把自己想不明白的地方想明白。</p>
+    </header>
+
+    <div class="land-card">
+    <div class="land-stale" id="landStale" style="display:none"></div>
+
+    <div class="land-tabs">
+      <button class="land-tab on" data-tab="create" type="button">创建学习空间</button>
+      <button class="land-tab" data-tab="enter" type="button">进入已有空间</button>
+      <button class="land-tab" data-tab="account" type="button">账号登录</button>
+    </div>
+
+    <div class="land-pane" id="paneCreate">
+      <div class="field"><label>姓名</label><input id="spName" placeholder="如：张小明（重名会自动加数字）" maxlength="40" autocomplete="off"></div>
+      <div class="land-namehint" id="spNameHint"></div>
+      <div class="field"><label>访问口令（强烈建议设置）</label><input id="spPass" type="password" placeholder="不设口令，别人猜到编号就能看" autocomplete="off"></div>
+      <div class="land-warn">空间 ID 按创建顺序连号（0001、0002…），<b>别人能猜到编号</b>。不设口令 = 数据对全网公开。</div>
+      <button class="land-btn" id="spCreate" type="button">创建并进入</button>
+    </div>
+
+    <div class="land-pane" id="paneEnter" style="display:none">
+      <div class="field"><label>空间 ID</label><input id="spId" placeholder="如：0001（纯数字也可只输 1）" autocomplete="off"></div>
+      <div class="field"><label>访问口令</label><input id="spPass2" type="password" placeholder="创建时设置的口令" autocomplete="off"></div>
+      <button class="land-btn" id="spEnter" type="button">进入</button>
+    </div>
+
+    <!-- 账号：密码登录 / 手机验证码 / 注册 / 忘记密码 -->
+    <div class="land-pane" id="paneAccount" style="display:none">
+
+      <div class="acct" id="acctLogin">
+        <div class="field"><label>用户名 / 手机号 / 邮箱</label><input id="acctName" placeholder="三种都可以" autocomplete="username"></div>
+        <div class="field"><label>密码</label><input id="acctPass" type="password" placeholder="至少 6 位" autocomplete="current-password"></div>
+        <div class="acct-row">
+          <label class="sw"><input type="checkbox" id="acctRemember" checked><span>记住我</span></label>
+          <button class="land-link" id="acctToReset" type="button">忘记密码？</button>
+        </div>
+        <button class="land-btn" id="acctLoginBtn" type="button">登录</button>
+        <div class="acct-row center">
+          <button class="land-link" id="acctToRegister" type="button">注册账号</button>
+          <span class="dim">·</span>
+          <button class="land-link" id="acctToSms" type="button">手机验证码登录</button>
+        </div>
+      </div>
+
+      <div class="acct" id="acctSms" hidden>
+        <div class="field"><label>手机号</label><input id="smsPhone" inputmode="numeric" maxlength="11" placeholder="11 位手机号" autocomplete="tel"></div>
+        <div class="field"><label>验证码</label>
+          <div class="acct-code">
+            <input id="smsCode" inputmode="numeric" maxlength="6" placeholder="6 位数字" autocomplete="one-time-code">
+            <button class="btn sm" id="smsSend" type="button">获取验证码</button>
+          </div>
+        </div>
+        <div id="smsNewUser" hidden>
+          <div class="field"><label>你的名字</label><input id="smsName" maxlength="40" placeholder="会作为你的学习空间名" autocomplete="off"></div>
+          <div class="field"><label>学段 / 年级</label>
+            <div class="acct-2col">
+              <select class="sel" id="smsStage"></select>
+              <select class="sel" id="smsGrade"></select>
+            </div>
+          </div>
+        </div>
+        <label class="acct-agree"><input type="checkbox" id="smsAgree"><span>我已阅读并同意<a href="#" data-doc="terms">《用户协议》</a>、<a href="#" data-doc="privacy">《隐私政策》</a>与<a href="#" data-doc="children-privacy">《儿童个人信息保护规则》</a>（不满 14 周岁用户由监护人确认同意）</span></label>
+        <button class="land-btn" id="smsLoginBtn" type="button">登录 / 首次注册</button>
+        <div class="acct-row center"><button class="land-link" id="smsBack" type="button">返回密码登录</button></div>
+      </div>
+
+      <div class="acct" id="acctRegister" hidden>
+        <div class="field"><label>用户名</label><input id="rgName" maxlength="16" placeholder="2-16 位，中英文 / 数字 / 下划线" autocomplete="username"></div>
+        <div class="field"><label>手机号（选填）</label><input id="rgPhone" inputmode="numeric" maxlength="11" placeholder="用于找回密码" autocomplete="tel"></div>
+        <div class="field"><label>邮箱（选填）</label><input id="rgEmail" placeholder="用于找回密码" autocomplete="email"></div>
+        <div class="field"><label>学段 / 年级</label>
+          <div class="acct-2col">
+            <select class="sel" id="rgStage"></select>
+            <select class="sel" id="rgGrade"></select>
+          </div>
+        </div>
+        <div class="field"><label>设置密码</label><input id="rgPass" type="password" placeholder="至少 6 位" autocomplete="new-password"></div>
+        <div class="field"><label>确认密码</label><input id="rgPass2" type="password" placeholder="再输一次" autocomplete="new-password"></div>
+        <label class="acct-agree"><input type="checkbox" id="rgAgree"><span>我已阅读并同意<a href="#" data-doc="terms">《用户协议》</a>、<a href="#" data-doc="privacy">《隐私政策》</a>与<a href="#" data-doc="children-privacy">《儿童个人信息保护规则》</a>（不满 14 周岁用户由监护人确认同意）</span></label>
+        <button class="land-btn" id="rgSubmit" type="button">立即注册</button>
+        <div class="acct-row center"><button class="land-link" id="rgBack" type="button">返回登录</button></div>
+      </div>
+
+      <div class="acct" id="acctReset" hidden>
+        <div class="field"><label>注册时的手机号</label><input id="rsPhone" inputmode="numeric" maxlength="11" placeholder="11 位手机号" autocomplete="tel"></div>
+        <div class="field"><label>验证码</label>
+          <div class="acct-code">
+            <input id="rsCode" inputmode="numeric" maxlength="6" placeholder="6 位数字" autocomplete="one-time-code">
+            <button class="btn sm" id="rsSend" type="button">获取验证码</button>
+          </div>
+        </div>
+        <div class="field"><label>设置新密码</label><input id="rsPass" type="password" placeholder="至少 6 位" autocomplete="new-password"></div>
+        <div class="field"><label>确认新密码</label><input id="rsPass2" type="password" placeholder="再输一次" autocomplete="new-password"></div>
+        <button class="land-btn" id="rsSubmit" type="button">重置密码</button>
+        <div class="acct-row center"><button class="land-link" id="rsBack" type="button">返回登录</button></div>
+      </div>
+
+    </div>
+
+    <div class="land-err" id="landErr"></div>
+
+    <!-- ★ 合规入口：三份文档本来就有（server/account.js 的 DOC_TEXT），
+         但此前只有注册 / 验证码表单里的勾选框能点到 —— 走「创建学习空间」
+         这条最常见路径的人**一辈子看不到**。面向未成年人的产品，
+         这三篇必须在任何入口都公开可及，所以放进页脚常驻。
+         这里**不强制勾选**：创建空间是我们的"最轻路径"（家长给孩子开个空间不该先注册账号），
+         加一个必勾框会把这条路径也变成一道手续。是否要改成强制，留给产品定。 -->
+    <div class="land-foot">
+      <div class="land-legal">
+        <a href="#" data-doc="terms">用户协议</a>
+        <span class="land-sep">·</span>
+        <a href="#" data-doc="privacy">隐私政策</a>
+        <span class="land-sep">·</span>
+        <a href="#" data-doc="children-privacy">儿童个人信息保护规则</a>
+      </div>
+      <div class="land-note">不满 14 周岁，请由监护人阅读并同意后再使用</div>
+      <div class="land-meta">数据按「学习空间」隔离存储 · 一个家庭共用一个空间</div>
+      <div class="land-meta">
+        <button class="land-link" id="spAdmin" type="button">空间管理（管理员）</button>
+      </div>
+    </div>
+
+    </div><!-- /.land-card -->
+  </div><!-- /.land-col -->
+</div>
+
+<!-- ============ 主界面 ============ -->
+<div class="app" id="app" style="display:none">
+
+  <aside class="side" id="side">
+    <div class="brand">
+      <b>后浪奔涌</b>
+      <small>AI 学习平台</small>
+      <div class="space-pill" id="spacePill">
+        <div class="sp-txt">
+          <span id="spaceName"></span>
+          <span id="spaceIdChip" title="点击复制空间 ID"></span>
+        </div>
+        <button class="btn ghost sm" id="switchSpace" type="button">切换</button>
+      </div>
+      <div class="pet-line" id="petLine" title="成长值来自知识卡状态推进，不来自在线时长"></div>
+      <div class="ann-line">
+        <button class="btn ghost sm" id="annBtn" type="button"><span class="nav-txt">公告</span><span class="badge" id="annBadge" hidden></span></button>
+      </div>
+    </div>
+
+    <!-- ★ 顶级导航只留两根：对话 / 知识库。
+         为什么砍掉另外 9 根：学生进来是为了"问"和"翻自己的东西"，
+         11 根平级导航等于让他每次都先做一次选择题。
+         知识卡 / 测评 / 英语 / 共享池 / 项目 / 看板 / 能力 收进知识库的二级分区，
+         记忆 / 设置 收进右上角的头像菜单（见 .me-chip）。 -->
+    <nav class="nav">
+      <button class="nav-i on" data-view="chat" type="button"><span class="ni-dot"></span><span class="nav-txt">对话</span></button>
+      <button class="nav-i" data-view="kb" type="button"><span class="ni-dot"></span><span class="nav-txt">知识库</span><span class="badge" id="navDue" hidden></span></button>
+    </nav>
+
+    <!-- ★ 左栏以「项目」为主轴，不再以「对话」为主轴。
+         为什么：对话是"一次问答"，项目是"一件正在做的事"。
+         学生打开产品时脑子里想的是"我要弄明白物理这章"，
+         不是"我要打开第 7 个对话"——以对话为轴等于让他自己记住上下文。
+         未归入项目的散装对话收进底部一个分组，不会没地方去。 -->
+    <div class="side-h" id="convHead">
+      <span>项目</span>
+      <button class="btn sm" id="newProj" type="button">+ 新建项目</button>
+    </div>
+    <div class="conv-filter">
+      <input class="inp" id="convSearch" placeholder="搜项目 / 对话" autocomplete="off">
+      <button class="btn ghost sm" id="favOnly" type="button" title="只看收藏">★</button>
+    </div>
+    <div class="proj-list" id="convList"></div>
+  </aside>
+  <div class="side-resizer" id="sideResizer" title="调整目录宽度" role="separator" aria-orientation="vertical"></div>
+  <!-- 移动端抽屉遮罩：侧栏是 280px 的浮层，打开后正好盖住汉堡按钮本身，
+       没有遮罩就"点得到开、点不到关"。点遮罩关闭（.side.open ~ .side-mask） -->
+  <div class="side-mask" id="sideMask" aria-hidden="true"></div>
+
+  <main class="main">
+
+    <!-- 对话视图 -->
+    <section class="view" id="view-chat">
+      <div class="topbar">
+        <button class="btn ghost sm hamb" id="hamb" type="button">☰</button>
+        <button class="btn ghost sm" id="sideToggle" type="button" title="收起菜单（只留图标）">⇤</button>
+        <div class="tb-txt">
+          <div class="t" id="convTitle">新对话</div>
+          <div class="s" id="convSub">
+            <span id="convSubText">问吧，我不会直接给你答案</span>
+            <select class="sel proj-sel" id="projectSel" title="选择项目：绑定后自动引用项目里的资料">
+              <option value="">📁 未选择项目</option>
+            </select>
+          </div>
+        </div>
+        <div class="sp"></div>
+        <!-- 次级控件整组包一层：桌面端 display:contents 不改变排版，
+             窄屏下整组变成一条可横滑的独立行，避免把标题挤成竖排 -->
+        <div class="tb-tools">
+          <select class="sel" id="modeSel" title="学习模式">
+            <option value="selfstudy">自学引导</option>
+            <option value="feynman">费曼学习法</option>
+            <option value="diagnosis">学情诊断</option>
+          </select>
+          <select class="sel" id="modelSel" title="模型"></select>
+          <button class="btn ghost sm" id="agentBtn" type="button" title="选择 AI 助手">智能体</button>
+          <button class="btn ghost sm" id="shareBtn" type="button">分享</button>
+          <button class="btn ghost sm" id="convMenuBtn" type="button" title="更多操作">⋯</button>
+        </div>
+        <button class="me-chip" type="button" title="记忆 / 设置 / 空间 / 退出" aria-label="我的"></button>
+      </div>
+
+      <!-- 空状态的静态兜底。
+           结构必须与 app.js 的 renderStreamEmpty() 保持一致（类名 + 四张卡的 data-ec），
+           否则"有历史对话的返回用户"在 boot 的 await 期间会先看到一版错版再被换掉。
+           唯一区别：这里没有空间名（boot 时才知道），JS 渲染时会补上。
+           `_parity8check.cjs` 有断言守这两处不漂移。 -->
+      <div class="stream" id="stream">
+        <div class="stream-in">
+          <div class="empty" id="streamEmpty">
+            <svg class="empty-art" viewBox="0 0 168 132" fill="none" aria-hidden="true">
+              <circle cx="49" cy="50" r="2.5" fill="var(--pri)" opacity=".34"/>
+              <circle cx="119" cy="40" r="3" fill="var(--pri)" opacity=".26"/>
+              <circle cx="70" cy="24" r="2" fill="var(--pri)" opacity=".2"/>
+              <circle cx="99" cy="30" r="2.5" fill="var(--pri)" opacity=".3"/>
+              <path d="M84 113 C 81 93 87 75 84 53" stroke="var(--pri)" stroke-width="3" stroke-linecap="round"/>
+              <path d="M84 89 C 71 87 60 78 58 65 C 71 63 82 72 84 89 Z" fill="var(--pri)" opacity=".85"/>
+              <path d="M84 77 C 97 73 107 64 109 51 C 96 51 86 60 84 77 Z" fill="var(--pri)" opacity=".5"/>
+              <path d="M0 112 Q 42 96 84 112 T 168 112 L168 132 L0 132 Z" fill="var(--pri)" opacity=".1"/>
+              <path d="M0 122 Q 42 108 84 122 T 168 122 L168 132 L0 132 Z" fill="var(--pri)" opacity=".2"/>
+            </svg>
+            <h1 class="empty-hi">你好</h1>
+            <p class="empty-ask">今天想弄明白什么？</p>
+            <p class="empty-stance">我不会直接给你答案 —— 先问你卡在哪一步，再陪你走完剩下那步。</p>
+            <div class="empty-cards" id="emptyCards">
+              <button class="ec" type="button" data-ec="wrong">
+                <span class="ec-i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.5 3 19l4.5-1L18 7.5 14.5 4 4 14.5Z"/><path d="M13 5.5 16.5 9"/></svg></span>
+                <b>讲错题</b><span class="ec-d">把题目发我，我先问你卡在哪一步</span>
+              </button>
+              <button class="ec" type="button" data-ec="read">
+                <span class="ec-i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h7l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M12 3v4h4"/><path d="M7 12h8M7 15.5h5"/></svg></span>
+                <b>读材料</b><span class="ec-d">贴一段进来，我陪你把不懂的挖出来</span>
+              </button>
+              <button class="ec" type="button" data-ec="mem">
+                <span class="ec-i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H18v14H6.5A2.5 2.5 0 0 0 4 19.5V5.5Z"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H18v3H6.5A2.5 2.5 0 0 1 4 19.5Z"/></svg></span>
+                <b>背下来</b><span class="ec-d">要记的词或概念，报给我，我来考你</span>
+              </button>
+              <button class="ec" type="button" data-ec="why">
+                <span class="ec-i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4"/><path d="M8 9.5h5M10.5 7v5"/></svg></span>
+                <b>问个为什么</b><span class="ec-d">任何想不通的现象，我们一起拆</span>
+              </button>
+            </div>
+            <div class="empty-tips">💡 在「知识库」上传资料 → 创建「项目」把资料归组 → 对话顶部选项目，自动引用资料作答</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="jump-btns" id="jumpBtns" hidden>
+        <button class="jump" id="jumpTop" type="button" title="一键回到对话顶部">↑</button>
+        <button class="jump" id="jumpBottom" type="button" title="一键前往对话底部">↓</button>
+      </div>
+
+      <div class="composer-wrap">
+        <div class="temp-docs" id="tempDocs" hidden></div>
+        <div class="attach-preview" id="attachPreview" hidden></div>
+        <div class="composer-tools">
+          <button class="ct" id="attachBtn" type="button" title="上传图片或文档（也可直接 Ctrl+V 粘贴、或把文件拖进来）">＋</button>
+          <input type="file" id="attachFile" multiple hidden>
+          <button class="ct" id="webBtn" type="button" title="开启联网搜索：适合查最新资讯">联网搜索</button>
+          <button class="ct" id="ttsBtn" type="button" title="朗读设置">朗读</button>
+          <span class="grow"></span>
+          <span class="ct-hint" id="ctHint"></span>
+        </div>
+        <div class="composer">
+          <textarea id="input" placeholder="说说你今天想弄明白什么…（可直接粘贴图片；Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="mic" id="mic" type="button" title="语音输入">◉</button>
+          <button class="btn danger" id="stop" type="button" hidden>停止生成</button>
+          <button class="btn primary" id="send" type="button">发送</button>
+        </div>
+      </div>
+      <div class="voice-hint" id="voiceHint"></div>
+    </section>
+
+    <!-- ================= 知识库视图（主工作区）=================
+         对标之后的结构：左边是"本子"（分类树，每个本子有容量），
+         右边是二级分区 —— 资料是默认分区，其余功能都收在这里当子面板。
+         只有「资料」分区才显示左侧分类树。 -->
+    <section class="view" id="view-kb" hidden>
+      <div class="topbar">
+        <button class="btn ghost sm hamb" type="button">☰</button>
+        <div class="tb-txt">
+          <div class="t" id="kbTitle">知识库</div>
+          <div class="s" id="kbSub">左边挑一个本子，右边的资料就是对它生效的</div>
+        </div>
+        <div class="sp"></div>
+        <input class="inp" id="kbSearch" placeholder="在资料里搜一段话">
+        <button class="me-chip" type="button" title="记忆 / 设置 / 空间 / 退出" aria-label="我的"></button>
+      </div>
+
+      <!-- 知识库使用引导：只在首次进入时显示，点击关闭后记住 -->
+      <div class="kb-guide" id="kbGuide">
+        <div class="kg-body">
+          <b>知识库怎么用？</b>
+          <span class="kg-step">① 在「资料」分区上传文档 → ② 创建「项目」把资料归组 → ③ 去「对话」选项目提问，AI 自动引用资料作答</span>
+          <span class="kg-step">知识卡 = 对话里值得记的点 · 测评 = 从知识卡里出题 · 英语 = 单词本 + 听写 · 共享池 = 同学互传</span>
+        </div>
+        <button class="kg-close" id="kbGuideClose" type="button" title="知道了">✕</button>
+      </div>
+
+      <div class="kb-wrap">
+        <aside class="kb-tree" id="kbTree">
+          <div class="kb-tree-h">
+            <span>知识库分类</span>
+            <button class="kb-tree-new" id="kbNewCat" type="button" title="新建一个本子">＋</button>
+          </div>
+          <div class="kb-tree-list" id="kbTreeList"></div>
+          <div class="kb-tree-foot" id="kbTreeFoot"></div>
+        </aside>
+
+        <div class="kb-main">
+          <div class="kb-tabs" id="kbTabs"></div>
+
+          <!-- 资料（默认分区）：状态 Tab + 上传 + 文档行 -->
+          <div class="kb-sub" id="sub-docs">
+            <div class="kb-subbar">
+              <div class="kb-state" id="kbState">
+                <button class="kb-state-i on" data-state="all" type="button">全部 <b data-n="all">0</b></button>
+                <button class="kb-state-i" data-state="ready" type="button">已就绪 <b data-n="ready">0</b></button>
+                <button class="kb-state-i" data-state="parsing" type="button">解析中 <b data-n="parsing">0</b></button>
+                <button class="kb-state-i" data-state="todo" type="button">需处理 <b data-n="todo">0</b></button>
+              </div>
+              <span class="sp"></span>
+              <button class="btn sm" id="kbUploadBtn" type="button">上传文档</button>
+            </div>
+            <div class="kb-drop" id="kbDrop">
+              <div><b>点击选择文件</b>，或把文件拖到这里</div>
+              <div class="dim">支持 PDF / Word(.docx) / PPT(.pptx) / Excel(.xlsx) / 文本 / Markdown / CSV，单个不超过 24MB</div>
+              <input type="file" id="kbFile" multiple hidden>
+            </div>
+            <div class="card-list" id="kbList"></div>
+          </div>
+
+        <div class="kb-sub" id="view-cards" hidden>
+          <div class="topbar">
+            <div class="tb-txt">
+              <div class="t">知识卡</div>
+              <div class="s">把学过的知识，慢慢收在这里</div>
+            </div>
+            <div class="sp"></div>
+            <span class="card-quota" id="cardQuota" title="每天 AI 帮你收卡的额度"></span>
+            <button class="btn sm ghost" id="cardRulesBtn" type="button">规则说明</button>
+          </div>
+          <div class="card-ai" id="cardAiBar">
+            <span class="card-ai-ic">✦</span>
+            <span class="card-ai-txt">AI 可以看看这段对话里，哪些值得收成知识卡。</span>
+            <button class="btn sm primary" id="cardSuggestBtn" type="button">让 AI 建议收卡</button>
+          </div>
+          <div class="card-stats" id="cardStats"></div>
+          <div class="card-bar">
+            <select class="sel" id="cardStatus">
+              <option value="all">全部状态</option>
+              <option value="due">今日待练</option>
+              <option value="learning">学习中</option>
+              <option value="almost">快记住了</option>
+              <option value="mastered">已掌握</option>
+              <option value="retired">无需再复习</option>
+            </select>
+            <select class="sel" id="cardSort">
+              <option value="due">最早到期</option>
+              <option value="created">最近收下</option>
+              <option value="knowledge">按知识点</option>
+            </select>
+            <input class="inp" id="cardSearch" placeholder="搜索知识点或题目">
+            <button class="btn sm" id="cardRefresh" type="button">刷新</button>
+          </div>
+          <div class="card-list" id="cardList"></div>
+          <div class="pager" id="cardPager"></div>
+        </div>
+
+        <!-- 测评（知识库分区）-->
+        <div class="kb-sub" id="view-exam" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">测评</div><div class="s">题从你收下的知识卡里出；做完的每一题都会回到复习队列</div></div>
+            <div class="sp"></div>
+            <select class="sel" id="exCount">
+              <option value="5">5 题</option>
+              <option value="8" selected>8 题</option>
+              <option value="12">12 题</option>
+              <option value="20">20 题</option>
+            </select>
+            <select class="sel" id="exSubject">
+              <option value="">全部学科</option>
+              <option value="math">数学</option>
+              <option value="chinese">语文</option>
+              <option value="english">英语</option>
+              <option value="science">科学</option>
+              <option value="social">社会</option>
+              <option value="general">综合</option>
+            </select>
+            <button class="btn primary sm" id="exNew" type="button">出一张卷</button>
+          </div>
+          <div class="card-stats" id="exStats"></div>
+          <div class="card-list" id="exList"></div>
+        </div>
+
+        <!-- 英语（知识库分区）-->
+        <div class="kb-sub" id="view-en" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">英语</div><div class="s">单词本 + 听写。读音用浏览器自带朗读，跟读只告诉你"识别成了什么"，不打音准分</div></div>
+            <div class="sp"></div>
+            <button class="btn ghost sm" id="enImport" type="button">批量导入</button>
+            <button class="btn ghost sm" id="enUnit" type="button">+ 单元</button>
+            <button class="btn primary sm" id="enDict" type="button">开始听写</button>
+          </div>
+          <div class="card-stats" id="enStats"></div>
+          <div class="cat-bar" id="enUnits"></div>
+          <div class="card-bar">
+            <select class="sel" id="enSort">
+              <option value="new">最近加入</option>
+              <option value="wrong">错得最多</option>
+              <option value="az">按字母</option>
+            </select>
+            <input class="inp" id="enSearch" placeholder="搜单词或中文意思">
+            <span class="sp"></span>
+            <button class="btn sm" id="enToCards" type="button">转成拼写卡</button>
+          </div>
+          <div class="card-list" id="enList"></div>
+        </div>
+
+        <!-- 共享池（知识库分区）-->
+        <div class="kb-sub" id="view-pool" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">共享池</div><div class="s">同学之间互相给的学习资料。取用是「复制进自己空间」，之后各改各的，互不影响</div></div>
+            <div class="sp"></div>
+            <button class="btn primary sm" id="poolShare" type="button">分享我的资料</button>
+          </div>
+          <div class="seg" id="poolTabs" style="margin:0 0 12px">
+            <button data-tab="browse" class="on" type="button">逛池子</button>
+            <button data-tab="mine" type="button">我分享的</button>
+          </div>
+          <div class="card-bar">
+            <select class="sel" id="poolSubject">
+              <option value="all">全部学科</option>
+              <option value="math">数学</option>
+              <option value="chinese">语文</option>
+              <option value="english">英语</option>
+              <option value="science">科学</option>
+              <option value="social">社会</option>
+              <option value="general">综合</option>
+            </select>
+            <select class="sel" id="poolKind">
+              <option value="all">全部类型</option>
+              <option value="cards">知识卡</option>
+              <option value="words">单词表</option>
+              <option value="exam">练习卷</option>
+              <option value="note">笔记</option>
+            </select>
+            <select class="sel" id="poolSort">
+              <option value="new">最新</option>
+              <option value="hot">被取用最多</option>
+            </select>
+            <input class="inp" id="poolSearch" placeholder="搜标题或摘要">
+            <button class="btn sm" id="poolRefresh" type="button">刷新</button>
+          </div>
+          <div class="card-list" id="poolList"></div>
+        </div>
+
+        <!-- 项目（知识库分区）-->
+        <div class="kb-sub" id="view-projects" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">项目</div><div class="s">一个项目 = 一组资料 + 一条学习指令</div></div>
+            <div class="sp"></div>
+            <button class="btn sm" id="newProjPane" type="button">+ 新建项目</button>
+          </div>
+          <div class="card-list" id="projList"></div>
+        </div>
+
+        <!-- 看板（知识库分区）-->
+        <div class="kb-sub" id="view-dash" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">看板</div><div class="s">先量后定：先看清楚做了什么，再决定补哪里</div></div>
+            <div class="sp"></div>
+            <select class="sel" id="dashDays">
+              <option value="7">近 7 天</option>
+              <option value="14" selected>近 14 天</option>
+              <option value="30">近 30 天</option>
+            </select>
+            <button class="btn sm" id="dashRefresh" type="button">刷新</button>
+          </div>
+          <!-- 学习日报（批次10）由 #dashBody 里的 #dailyBox 承载。
+               ★ 不要再给日报单独开一个 .card-list ——
+                 .card-list 是 flex:1 + overflow-y:auto，两个兄弟会**抢高度**，
+                 结果日报和看板各自缩一半、各自滚动，两块都看不全。 -->
+          <div class="card-list" id="dashBody"></div>
+        </div>
+
+        <!-- 能力（知识库分区）-->
+        <div class="kb-sub" id="view-skills" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">能力</div><div class="s">每个能力都是一套"怎么教你"的方法，勾上就在对话里生效</div></div>
+            <div class="sp"></div>
+            <button class="btn ghost sm" id="skillClear" type="button">全部取消</button>
+          </div>
+          <div class="cat-bar" id="skillCats"></div>
+          <div class="cat-bar" id="skillSubjects" hidden></div>
+          <div class="card-list" id="skillList"></div>
+        </div>
+
+        <!-- 记忆（不在分区条上，只能从右上角头像菜单进）-->
+        <div class="kb-sub" id="view-memory" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">记忆</div><div class="s">让 AI 记住你的偏好与学习状态</div></div>
+            <div class="sp"></div>
+            <label class="sw"><input type="checkbox" id="memToggle"><span>启用记忆</span></label>
+          </div>
+          <div class="card-list" id="memList"></div>
+          <div class="card-bar">
+            <input class="inp" id="memInput" placeholder="比如：我不喜欢直接给答案，请多问我">
+            <button class="btn sm" id="memAdd" type="button">添加</button>
+          </div>
+        </div>
+
+        <!-- 设置（不在分区条上，只能从右上角头像菜单进）-->
+        <div class="kb-sub" id="view-settings" hidden>
+          <div class="topbar"><div class="tb-txt"><div class="t">设置</div><div class="s">个人资料 · 主题 · 字号</div></div></div>
+          <!-- 个人资料由 renderSettings 渲染（账号登录才有内容） -->
+          <div id="profBox"></div>
+          <!-- 空间 / 主题 / 字号 / 退出 -->
+          <div class="card-list" id="setList"></div>
+        </div>
+
+            </div><!-- /kb-main -->
+      </div><!-- /kb-wrap -->
+    </section>
+
+  </main>
+
+  <!-- 互动课堂右侧面板（拖拽可调宽；分享页没有它，会现场建一个全屏的） -->
+  <aside class="iv-panel" id="ivPanel" hidden>
+    <div class="iv-resizer" id="ivResizer" title="调整宽度" role="separator" aria-orientation="vertical"></div>
+    <div class="iv-h">
+      <b id="ivTitle">互动课堂</b>
+      <div class="sp"></div>
+      <button class="btn ghost sm" id="ivFull" type="button" title="全屏">⤢</button>
+      <button class="btn ghost sm" id="ivClose" type="button" title="关闭">关闭</button>
+    </div>
+    <div class="iv-body" id="ivBody"></div>
+  </aside>
+</div>
+
+<!-- 通用弹窗 -->
+<div class="mask" id="mask" hidden>
+  <div class="modal">
+    <div class="modal-h"><b id="modalTitle"></b><div class="sp"></div><button class="btn ghost sm" id="modalClose" type="button">关闭</button></div>
+    <div class="modal-b" id="modalBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/js/render.js"></script>
+<script src="/js/poster.js"></script>
+<script src="/js/interactive.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

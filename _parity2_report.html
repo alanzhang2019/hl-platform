@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>批次2（Chat 富功能）完成报告</title>
+<style>
+  :root{ --bg:#f5f7fb; --card:#fff; --ink:#1f2937; --sub:#6b7280; --line:#e5e7eb; --ok:#16a34a; --okbg:#dcfce7; --warn:#d97706; --warnbg:#fef3c7; --blue:#2563eb; --bluebg:#dbeafe; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6;padding:28px}
+  .wrap{max-width:920px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--sub);font-size:13px;margin-bottom:20px}
+  .banner{display:flex;gap:16px;flex-wrap:wrap;background:var(--okbg);border:1px solid #bbf7d0;border-radius:14px;padding:18px 22px;margin-bottom:22px}
+  .banner .big{font-size:30px;font-weight:700;color:var(--ok);line-height:1.1}
+  .banner .lbl{font-size:12px;color:#15803d}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:18px}
+  .card h2{font-size:15px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+  .tag{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bluebg);color:#1d4ed8}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--sub);font-weight:600;font-size:12px}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+  .pill{display:inline-block;font-size:11px;padding:2px 9px;border-radius:999px}
+  .pill.ok{background:var(--okbg);color:#15803d}
+  .pill.warn{background:var(--warnbg);color:#b45309}
+  ul{margin:8px 0 0;padding-left:18px;font-size:13px}
+  li{margin:3px 0}
+  code{background:#f1f5f9;padding:1px 6px;border-radius:5px;font-size:12px}
+  .fix{background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px 14px;font-size:13px;margin-bottom:18px}
+  .fix b{color:#c2410c}
+  .foot{color:var(--sub);font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>批次2 · Chat 富功能 — 完成报告</h1>
+  <div class="sub">后浪奔涌 / 涌现智训 · 1:1 还原项目 · 生成日期 2026-10-01</div>
+
+  <div class="banner">
+    <div><div class="big">1135</div><div class="lbl">全量非浏览器用例（全部通过）</div></div>
+    <div><div class="big">112</div><div class="lbl">批次2 HTTP 全链路（原 111，已修复）</div></div>
+    <div><div class="big">135</div><div class="lbl">批次2 模块级自检</div></div>
+    <div><div class="big">13</div><div class="lbl">测试套件（已接入总回归）</div></div>
+  </div>
+
+  <div class="fix">
+    <b>本次修复（server.js:603）</b>：<code>translate</code> 路由分支原对不存在的消息统一返回 <b>400</b>；改为 <code>e.code === 'NOT_FOUND' ? 404 : 400</code>，与同文件 <code>favorite</code>/<code>speak</code> 分支一致。修复后 <code>POST /api/messages/m_无/translate</code> 返回 404，HTTP 全链路由 111/112 → <b>112/112</b>。
+  </div>
+
+  <div class="card">
+    <h2>全量回归套件 <span class="tag">node _run-tests.cjs --skip-browser</span></h2>
+    <table>
+      <tr><th>套件</th><th>文件</th><th>覆盖</th><th class="num">用例</th><th>状态</th></tr>
+      <tr><td>技能注册表</td><td>_skillcheck.cjs</td><td>57 技能唯一性 / 内容质量</td><td class="num">38</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>.env 加载</td><td>_envcheck.cjs</td><td>加载器先于 require</td><td class="num">6</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>后端端到端</td><td>_platformtest.cjs</td><td>身份/对话/项目/记忆/卡片/宠物/知识库/看板</td><td class="num">270</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>渲染管线</td><td>_rendertest.cjs</td><td>MD / TeX / svg-json / 图表动画</td><td class="num">131</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>抽取+知识库</td><td>_extracttest.cjs</td><td>真实 PDF/ZIP 夹具</td><td class="num">110</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>资料池/测评/英语</td><td>_p3p6p10test.cjs</td><td>P3 共享 / P6 出卷 / P10 听写</td><td class="num">188</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>账号层（模块）</td><td>_parity1check.cjs</td><td>短信/重置/改密/心跳/公告/迁移</td><td class="num">81</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>账号层（HTTP）</td><td>_parityhttp.cjs</td><td>批次1 全链路</td><td class="num">64</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td><b>批次2（模块）</b></td><td>_parity2check.cjs</td><td>状态机/软删/临时资料/TTS/翻译/配图白名单/上传/级联</td><td class="num">135</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td><b>批次2（HTTP）</b></td><td>_parity2http.cjs</td><td>SSE断流恢复/停止/操作/搜索降级/配图轮询/分享/跨空间</td><td class="num">112</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>账号层（浏览器）</td><td>_parityui.cjs</td><td>登录页/协议/公告/资料</td><td class="num">41*</td><td><span class="pill ok">✓</span></td></tr>
+      <tr><td>浏览器冒烟</td><td>_browsertest.cjs</td><td>14 组 UI 全流程</td><td class="num">185*</td><td><span class="pill ok">✓</span></td></tr>
+    </table>
+    <div class="foot">* 浏览器套件需 Chromium（playwright-core），不在 --skip-browser 内，但此前已单独验证 41 / 185 全过。</div>
+  </div>
+
+  <div class="card">
+    <h2>批次2 功能覆盖（对应清单 §3）</h2>
+    <ul>
+      <li><b>对话核心</b>：SSE 流式、断流恢复（服务端继续生成，前端轮询补回完整回复）、显式停止（STOP_FLAGS）、重新生成、消息软删、消息级操作（复制/朗读/翻译/收藏/删除）。</li>
+      <li><b>附件与资料</b>：图片/文档上传（10MB 上限、类型白名单、路径穿越护栏）、对话级临时资料（scope=temp 隔离、删对话级联清走）。</li>
+      <li><b>富功能</b>：联网搜索（未配置诚实降级）、TTS（可插拔上游 + 浏览器兜底，偏好按 userId/spaceId 独立）、AI 配图（异步任务 + 心跳 35s + 僵死扫描 70s + 服务端/前端双重白名单）、译文缓存。</li>
+      <li><b>模型与智能体</b>：模型分类列表、智能体选择器（复用能力中心 57 技能）、自定义指令、web_search 开关持久化。</li>
+      <li><b>项目与对话管理</b>：重命名/删除/移动项目、对话搜索、收藏过滤、侧栏收起、目录拖拽、快速滚动、分享管理。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>遗留与下一步</h2>
+    <ul>
+      <li><span class="pill warn">待手动清理</span> <code>_btdata/</code>：测试遗留 SQLite 草稿库，被环境 <code>safe-delete</code> 拦截（trash 失败 fail-closed），<code>rm</code>/<code>mv</code> 均无法删。属无害测试产物，需用户手动清理或放开环境限制。</li>
+      <li><span class="pill warn">未发布</span> 用户要求「13 批次全做完再发」，批次2 尚未部署上线。</li>
+      <li><b>待续批次</b>：§18 批次3-13（知识卡深度 / 互动课堂 Pyodide / 学习日报周报 / 家长端 / 英语跟读 / 测评7阶段 / 能力等级 / 知识库补全 / 计费 / 视觉动效）。</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>

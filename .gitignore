@@ -1,0 +1,25 @@
+# ---- 密钥：绝不入库 ----
+# 注意：发布到 WorkBuddy 云端时 .env 需要「随代码上传」，那是发布工具的事，
+# 与 git 无关。git 里只能有 .env.example（值是占位符）。
+.env
+.env.local
+.env.*.local
+
+# ---- 依赖（本项目目前零依赖，先挡住）----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# ---- 运行时数据：SQLite 库 / 上传的文件 ----
+data/
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ---- 测试与截图产物 ----
+_shots*/
+_probe-out/
+*-shots/
+*.log
