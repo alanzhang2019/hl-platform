@@ -116,7 +116,12 @@ function enterSpace(id, passcode) {
   if (sid !== canon || sid === '_public') { const e = new Error('空间不存在'); e.code = 'NOT_FOUND'; throw e; }
   const sp = D.get('SELECT * FROM spaces WHERE id = ?', sid);
   if (!sp) { const e = new Error('空间不存在'); e.code = 'NOT_FOUND'; throw e; }
-  if (passcode && sp.passcode && sp.passcode !== passcode) {
+  // 口令校验：只要空间设了口令就必须比对，**不能因为请求没带口令就放行**。
+  // 旧写法 `passcode && sp.passcode && ...` 会短路：请求体不带 passcode（或传空串）时
+  // 整条判断为 false，直接发会话；而空间 ID 是连号的（0001、0002…），
+  // 等于所有设了口令的空间都能被枚举进入。
+  // 入参 trim 对齐 createSpace（那边存的就是 trim 后的值，实测库内 5 条口令均无首尾空白）。
+  if (sp.passcode && sp.passcode !== String(passcode || '').trim()) {
     const e = new Error('访问口令不正确'); e.code = 'WRONG_PASSCODE'; throw e;
   }
   touchSpace(sid);
