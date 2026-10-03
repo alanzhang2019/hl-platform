@@ -378,13 +378,24 @@
       return '<option value="' + esc(p.id) + '"' + (cfg.kind === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>';
     }).join('');
 
-    // 音色快速选择：按当前 provider 列出已知候选
-    var voiceOpts = '';
-    if (voices && voices.voices && voices.voices.length) {
-      voiceOpts = '<datalist id="adTtsVoiceList">' +
-        voices.voices.map(function (v) { return '<option value="' + esc(v) + '">'; }).join('') +
-        '</datalist>';
+    // 音色：改成真正的 <select> 下拉框，不再用 datalist（浏览器兼容性差，
+    // 且输入框里的完整名和候选短名不匹配时列表为空）。
+    // 显示时去掉模型前缀（如 FunAudioLLM/CosyVoice2-0.5B:alex → alex）。
+    var voiceDisplay = cfg.voice || '';
+    var colonIdx = voiceDisplay.indexOf(':');
+    var voiceShort = colonIdx >= 0 ? voiceDisplay.slice(colonIdx + 1) : voiceDisplay;
+
+    var voiceSelOpts = '';
+    // 如果当前值不在已知候选里，加一个当前值选项
+    if (voiceShort && (!voices.voices || voices.voices.indexOf(voiceShort) < 0)) {
+      voiceSelOpts += '<option value="' + esc(voiceShort) + '" selected>' + esc(voiceDisplay) + '（当前）</option>';
     }
+    if (voices && voices.voices) {
+      voices.voices.forEach(function (v) {
+        voiceSelOpts += '<option value="' + esc(v) + '"' + (voiceShort === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+      });
+    }
+    voiceSelOpts += '<option value="">自定义…</option>';
 
     var envNote = function (label, cur, env, over) {
       return '<div class="dim" style="font-size:.74rem;margin-top:2px">' +
@@ -406,7 +417,8 @@
       '</div>' +
       '<div class="ad-tts-row">' +
         '<label>音色</label>' +
-        '<input type="text" id="adTtsVoice" value="' + esc(cfg.voice || '') + '" placeholder="如 alex" list="adTtsVoiceList">' + voiceOpts +
+        '<select id="adTtsVoice">' + voiceSelOpts + '</select>' +
+        '<input type="text" id="adTtsVoiceCustom" value="' + esc(voiceShort) + '" placeholder="输入完整音色名" style="display:none;margin-top:6px;font:inherit;font-size:.82rem;padding:.42em .6em;border-radius:var(--r-xs);border:1px solid var(--line-2);background:var(--panel);color:var(--txt);width:100%;max-width:360px;">' +
         envNote('留空恢复环境变量', cfg.voice, cfg.envVoice, cfg.overridden && cfg.overridden.voice) +
       '</div>' +
       '<div class="ad-tts-row">' +
@@ -437,6 +449,18 @@
     $('#adTtsProvider').addEventListener('change', function () {
       saveTts({ provider: this.value });
     });
+    // 音色选「自定义…」时显示文本输入框
+    $('#adTtsVoice').addEventListener('change', function () {
+      var custom = $('#adTtsVoiceCustom');
+      if (this.value === '') { custom.style.display = ''; custom.focus(); }
+      else { custom.style.display = 'none'; }
+    });
+    // 初始化：如果当前是自定义状态，显示输入框
+    var voiceSel = $('#adTtsVoice');
+    if (voiceSel && voiceSel.value === '') {
+      var customInput = $('#adTtsVoiceCustom');
+      if (customInput) customInput.style.display = '';
+    }
   }
 
   // ---------- 渲染：空间列表 ----------
@@ -769,10 +793,12 @@
     // TTS 面板：保存 / 恢复默认 / 测试朗读
     $('#adTts').addEventListener('click', function (e) {
       if (e.target.closest('#adTtsSave')) {
+        var voiceVal = $('#adTtsVoice').value;
+        if (voiceVal === '') voiceVal = $('#adTtsVoiceCustom').value;
         saveTts({
           provider: $('#adTtsProvider').value,
           model: $('#adTtsModel').value,
-          voice: $('#adTtsVoice').value,
+          voice: voiceVal,
           baseUrl: $('#adTtsUrl').value,
           enabled: $('#adTtsEnabled').checked,
         });
