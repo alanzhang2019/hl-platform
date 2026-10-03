@@ -1933,22 +1933,42 @@
   }
   function openAgents() {
     const list = S.agents || [];
+    const lockedCount = list.filter(a => a.locked).length;
     openModal('选择 AI 助手',
       '<div class="field"><input class="inp" id="agQ" placeholder="搜索名称或关键词，例如：数学、作文"></div>' +
+      // 这一段是在回答用户最常问的那个问题：「未开启」到底是什么意思、怎么开。
+      // 关键事实：选中一个助手**只对这一段对话生效**，而且**不需要先"开启"**——
+      // 对话级技能只过档位闸（见 skills.promptsFor）。真正开不了的只有档位不够的那些。
+      '<p class="dim ag-tip">选中后<b>只对这一段对话生效</b>，不需要先去别处"开启"。' +
+      '想让它对每段对话都自动生效，去「知识库 → 能力」把对应那张卡片勾上。' +
+      (lockedCount ? '<br>灰掉的 ' + lockedCount + ' 个是<b>档位没到</b>，要空间管理员开放后才能用。' : '') +
+      '</p>' +
       '<div class="ag-list" id="agList"></div>');
     const paint = q => {
       const k = String(q || '').trim().toLowerCase();
       const rows = k ? list.filter(a => (a.name + a.description + a.subject).toLowerCase().indexOf(k) >= 0) : list;
       $('#agList').innerHTML = '<button class="ag-i' + (!S.agentId ? ' on' : '') + '" data-ag="" type="button">' +
         '<b>全部智能体</b><span>不指定，由我按你的问题自己判断</span></button>' +
-        rows.map(a => '<button class="ag-i' + (S.agentId === a.id ? ' on' : '') + '" data-ag="' + esc(a.id) + '" type="button">' +
-          '<b>' + esc(a.name) + (a.enabled ? '' : ' <i class="dim">未开启</i>') + '</b><span>' + esc(a.description || '') + '</span></button>').join('') ||
+        rows.map(a => '<button class="ag-i' + (S.agentId === a.id ? ' on' : '') + (a.locked ? ' locked' : '') +
+          '" data-ag="' + esc(a.id) + '"' + (a.locked ? ' data-locked="1" aria-disabled="true"' : '') + ' type="button">' +
+          '<b>' + esc(a.name) +
+          (a.locked
+            ? ' <i class="ag-lock">需「' + esc(a.tierName || '更高档位') + '」</i>'
+            : (a.enabled ? ' <i class="dim">已全局启用</i>' : '')) +
+          '</b><span>' + esc(a.description || '') + '</span></button>').join('') ||
         '<div class="dim" style="padding:10px">没找到匹配的智能体</div>';
     };
     paint('');
     $('#agQ').addEventListener('input', debounce(e => paint(e.target.value), 160));
     $('#agList').addEventListener('click', async ev => {
       const b = ev.target.closest('[data-ag]'); if (!b) return;
+      // 档位锁住的助手不许选：选了也不会生效（promptsFor 会把它滤掉），
+      // 但界面会显示"已选「XX」"—— 静默失效比当场拦下难查得多。
+      if (b.dataset.locked === '1') {
+        const a = list.filter(x => x.id === b.dataset.ag)[0];
+        toast((a && a.lockedNote) || '这个助手当前档位还用不了');
+        return;
+      }
       S.agentId = b.dataset.ag || '';
       renderAgentBtn();
       if (S.convId) {

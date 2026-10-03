@@ -2092,6 +2092,16 @@ body.resizing * { cursor: col-resize !important; }
   border-width: 0 2px 2px 0; transform: rotate(45deg);
 }
 
+/* 档位锁住的助手（2026-10-03）：灰掉 + 写明"需要哪一档"。
+   必须和"没全局启用"区分开 —— 后者选中就能用，前者选了也不会生效。
+   原来两者都画成「未开启」，学生会选中一个锁住的助手，看到"已选「XX」"，
+   然后发现 AI 毫无变化（服务端 promptsFor 会把它静默滤掉）。 */
+.ag-i.locked { opacity: .55; cursor: not-allowed; }
+.ag-i.locked:hover { border-color: var(--line); background: var(--panel); }
+.ag-lock { font-style: normal; font-weight: 400; font-size: .7rem; color: var(--warn); }
+/* 弹窗顶部那段"怎么用"的说明：默认 .dim 太小，这里是关键信息，给足行距 */
+.ag-tip { margin: 8px 0 0; line-height: 1.6; }
+
 /* ---- 拖入文件 ---- */
 .stream.drop { outline: 2px dashed var(--pri); outline-offset: -10px; background: var(--pri-soft); }
 

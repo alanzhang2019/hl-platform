@@ -1183,6 +1183,15 @@ function listAgents(spaceId, opts) {
     agents: filtered.map(a => ({
       id: a.id, name: a.name, icon: a.icon, description: a.description,
       subject: a.subject, category: a.category, enabled: a.enabled,
+      // locked / tierName / lockedNote 必须一起带上（2026-10-03）。
+      // 原来只给 enabled，前端就只能把"没全局启用"和"档位锁住"都画成「未开启」——
+      // 而这两件事后果完全不同：
+      //   · 没启用 → **不影响**在这段对话里用它（对话级技能只过档位闸，
+      //     见 skills.promptsFor 里那条注释），选中就生效；
+      //   · 档位锁住 → 真的用不了，promptsFor 会把它静默滤掉。
+      // 不区分的话，学生会选中一个锁住的助手、看到"已选「XX」"，
+      // 然后 AI 表现毫无变化 —— 静默失效比直接拦下难查得多。
+      locked: !!a.locked, tierName: a.tierName || '', lockedNote: a.lockedNote || '',
     })),
   };
 }
