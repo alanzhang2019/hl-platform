@@ -780,9 +780,8 @@
     S.space = me.space;
     hideLand();
     $('#app').style.display = 'flex';
-    $('#spaceName').textContent = me.space.name || me.space.id;
-    $('#spaceIdChip').textContent = 'ID：' + me.space.id;
-    $('#spaceIdChip').title = '点击复制空间 ID：' + me.space.id;
+    // 空间名与 ID 不再往侧栏写（那块已经收进「我的」菜单）。
+    // 常显的那份在 .me-chip 上，由 renderMeChip() 从 S.me 渲染；ID 在菜单里。
 
     await Promise.all([loadModels(), loadSide(), loadPet(), loadCardSummary(), loadSkills(), loadAvatars(), loadAnnouncements(), loadAgents(), loadTtsPref()]);
     // 侧栏收起状态是本地偏好，跟着设备走（手机上默认就是收起的）
@@ -946,11 +945,18 @@
     const me = S.me || {};
     const sp = me.space || {};
     const unread = (S.anns || []).filter(a => !a.read).length;
+    const unreadImportant = (S.anns || []).filter(a => !a.read && a.level === 'important').length;
     openModal('我的',
       '<div class="me-head"><span class="me-av big">' +
       ($$('.me-chip .me-av')[0] ? $$('.me-chip .me-av')[0].innerHTML : '') + '</span>' +
       '<div><b>' + esc(sp.name || sp.id || '学习者') + '</b>' +
-      '<div class="dim">空间 ID ' + esc(sp.id || '') + '</div></div></div>' +
+      '<div class="dim">空间 ID ' + esc(sp.id || '') + '</div></div>' +
+      // 切换空间原来在侧栏的空间卡上，现在跟过来 —— 放在这一行而不是菜单项里，
+      // 因为它是"离开当前空间"，跟下面的功能入口不是一类东西。
+      '<button class="btn ghost sm me-switch" id="meSwitchSpace" type="button">切换空间</button></div>' +
+      // 成长条：原来钉在侧栏顶部，现在收进这里
+      '<div class="pet-line me-pet" id="mePetLine" title="成长值来自知识卡状态推进，不来自在线时长">' +
+      petLineHTML(S.pet, S.unlocks) + '</div>' +
       '<div class="me-menu">' +
       // 记忆锁在阶段3（见 server/pet.js 的 UNLOCKS）—— 菜单项本身也要置灰，
       // 不能等用户点进去才告诉他"还不能用"。
@@ -958,7 +964,11 @@
         ? '<button class="me-mi" data-me="memory" type="button"><b>记忆</b><span>让 AI 记住你的偏好与学习状态</span></button>'
         : '<button class="me-mi locked" data-me="memory" type="button" disabled><b>记忆 · 未解锁</b><span>' + esc(lockedTip('memory')) + '</span></button>') +
       '<button class="me-mi" data-me="settings" type="button"><b>设置</b><span>个人资料 · 主题 · 字号</span></button>' +
-      '<button class="me-mi" data-me="ann" type="button"><b>公告</b><span>' +
+      // 公告原来在侧栏是个独立按钮（带一个未读红点）。侧栏那块撤掉之后，
+      // 红点得跟过来 —— 否则"有重要公告"这件事就没有任何地方提示了。
+      '<button class="me-mi" data-me="ann" type="button"><b>公告' +
+      (unreadImportant ? '<span class="badge me-badge">' + (unreadImportant > 99 ? '99+' : unreadImportant) + '</span>' : '') +
+      '</b><span>' +
       (unread ? '有 ' + unread + ' 条没看' : '看看有什么新消息') + '</span></button>' +
       '<button class="me-mi danger" data-me="logout" type="button"><b>退出登录</b><span>退出后可以换一个空间或个人账号</span></button>' +
       '</div>');
@@ -968,6 +978,8 @@
       if (k === 'ann') { closeModal(); openAnnouncements(); return; }
       closeModal(); switchView(k);
     }));
+    const sw = $('#meSwitchSpace');
+    if (sw) sw.addEventListener('click', () => { closeModal(); signOut(); });
   }
 
   // ================= 对话 =================
@@ -5517,28 +5529,42 @@
       S.unlocks = r.unlocks || null;
       const after = S.unlocks ? (S.unlocks.unlocked || []).join(',') : '';
       if (before !== after && $('#kbTabs')) renderKbTabs();
-      const p = r.pet;
-      const pct = p.maxed ? 100 : Math.round(Math.min(1, p.growth / (p.nextNeed || 1)) * 100);
-      const line = $('#petLine');
-      const nx = r.unlocks && r.unlocks.next;
-      // 宠物条不只是进度条，它同时是"下一步做什么"的提示牌 ——
-      // 所以把"再攒 N 点能解锁什么"直接写在上面，而不是藏在某个说明页里。
-      line.innerHTML = petIcon(p.stage) +
-        '<span>' + HL.esc(p.stageName) +
-        (p.maxed ? ' · 已长成'
-                 : ' · 还差 ' + p.toNext + ' 点' +
-                   (nx && nx.labels && nx.labels.length ? '解锁 ' + HL.esc(nx.labels.join('、')) : '')) +
-        '</span>' +
-        '<span class="pet-bar"><i style="width:' + pct + '%"></i></span>';
-      // 成长值真的涨了才亮一下。只是刷新页面不该有动效 ——
-      // 那会把"没变化"也演成"有变化"，动效就变成了噪音。
-      if (pulse && prev && p.growth > prev.growth) {
-        line.classList.remove('up');
-        void line.offsetWidth;   // 强制重排，否则连续两次加分不会重放动画
-        line.classList.add('up');
-        setTimeout(() => line.classList.remove('up'), 800);
+      // 成长条现在住在右上角「我的」菜单里（原来是钉在侧栏顶部的）。
+      // 菜单是点开才创建的，所以这里只负责把状态存好 + 菜单开着时原地刷新。
+      const line = $('#mePetLine');
+      if (line) {
+        line.innerHTML = petLineHTML(p, r.unlocks);
+        // 成长值真的涨了才亮一下。只是刷新页面不该有动效 ——
+        // 那会把"没变化"也演成"有变化"，动效就变成了噪音。
+        if (pulse && prev && p.growth > prev.growth) {
+          line.classList.remove('up');
+          void line.offsetWidth;   // 强制重排，否则连续两次加分不会重放动画
+          line.classList.add('up');
+          setTimeout(() => line.classList.remove('up'), 800);
+        }
       }
     } catch (e) {}
+  }
+
+  /**
+   * 成长条的内层 HTML。抽出来是因为它有两个渲染点：
+   * ① 「我的」菜单打开时由 meMenu() 拼进去；② 菜单开着的时候成长值涨了要原地刷新。
+   * 两处各写一份的话，改文案必然会漏一处。
+   *
+   * 它不只是进度条，同时是"下一步做什么"的提示牌 ——
+   * 所以把"再攒 N 点能解锁什么"直接写在上面，而不是藏在某个说明页里。
+   */
+  function petLineHTML(p, unlocks) {
+    if (!p) return '';
+    const pct = p.maxed ? 100 : Math.round(Math.min(1, p.growth / (p.nextNeed || 1)) * 100);
+    const nx = unlocks && unlocks.next;
+    return petIcon(p.stage) +
+      '<span>' + HL.esc(p.stageName) +
+      (p.maxed ? ' · 已长成'
+               : ' · 还差 ' + p.toNext + ' 点' +
+                 (nx && nx.labels && nx.labels.length ? '解锁 ' + HL.esc(nx.labels.join('、')) : '')) +
+      '</span>' +
+      '<span class="pet-bar"><i style="width:' + pct + '%"></i></span>';
   }
 
   // ================= 设置 =================
@@ -5725,10 +5751,8 @@
   async function loadAnnouncements() {
     try {
       const r = await api('/api/announcements');
-      const n = r.unreadImportant || 0;
-      const b = $('#annBadge');
-      b.hidden = n === 0;
-      b.textContent = n > 99 ? '99+' : String(n);
+      // 未读红点原来挂在侧栏的公告按钮上，那块撤掉之后改由「我的」菜单渲染
+      // （见 meMenu()，它从 S.anns 现算）。这里只负责把数据取回来。
       S.anns = r.announcements || [];
     } catch (e) { S.anns = S.anns || []; }
   }
@@ -5859,9 +5883,8 @@
     // 只靠汉堡切换的话用户"打得开、关不上"。
     if ($('#sideMask')) $('#sideMask').addEventListener('click', () => $('#side').classList.remove('open'));
     $$('.me-chip').forEach(b => b.addEventListener('click', () => meMenu()));
-    $('#switchSpace').addEventListener('click', () => { signOut(); });
-    $('#spaceIdChip').addEventListener('click', () => copyText(S.space ? S.space.id : ''));
-    $('#annBtn').addEventListener('click', openAnnouncements);
+    // 切换空间 / 复制空间 ID / 公告原来在侧栏顶部各有一个元素，现在都收进了
+    // 「我的」菜单（菜单是点开才创建的，所以监听器绑在 meMenu() 里，不在这里）。
     // 知识库使用引导：点击关闭后记住，下次不再显示
     const kg = $('#kbGuide');
     if (kg) {

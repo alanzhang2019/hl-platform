@@ -907,6 +907,61 @@ async function modeTests() {
 }
 
 // ============================================================
+// 九、空间卡 / 成长条 / 公告 搬进右上角「我的」菜单（2026-10-04）
+//
+// 这三块原来钉在侧栏顶部，占 234px 竖向空间 —— 而项目与对话列表才是学生
+// 天天在用的。搬走之后最容易留下的坑是"删了元素但 JS 还在引用"，
+// 那会在启动时抛 null 引用、整个应用白屏，所以这里重点锁住"引用也清了"。
+// ============================================================
+async function myMenuTests() {
+  group('九、空间卡搬进「我的」菜单');
+  const appjs = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.css'), 'utf8');
+
+  await t('侧栏里不再有空间卡 / 成长条 / 公告', async function () {
+    const brand = html.slice(html.indexOf('<div class="brand">'), html.indexOf('</div>', html.indexOf('<small>AI 学习平台</small>')));
+    assert.ok(brand.indexOf('space-pill') < 0, '侧栏不该再有 .space-pill');
+    assert.ok(brand.indexOf('petLine') < 0, '侧栏不该再有 #petLine');
+    assert.ok(brand.indexOf('annBtn') < 0, '侧栏不该再有 #annBtn');
+    assert.ok(brand.indexOf('后浪奔涌') >= 0, '品牌名要保留');
+  });
+
+  await t('已删元素在 JS 里没有任何残留引用（漏一个就白屏）', async function () {
+    const dead = ['#spaceName', '#spaceIdChip', "'#switchSpace'", '#annBtn', '#annBadge', '#petLine', 'space-pill', 'ann-line'];
+    const hit = dead.filter(id => appjs.indexOf(id) >= 0);
+    assert.deepStrictEqual(hit, [], '这些元素已经不在 HTML 里了，JS 还在引用：' + hit.join('、'));
+  });
+
+  await t('CSS 里也没有指向已删元素的规则', async function () {
+    // 注释里提到不算（那是给人看的解释），只看真正的选择器
+    const noComment = css.split('\n').filter(l => l.trim().indexOf('/*') !== 0 && l.indexOf('*') !== 0).join('\n');
+    const hit = ['.space-pill', '.sp-txt', '.ann-line'].filter(s => noComment.indexOf(s) >= 0);
+    assert.deepStrictEqual(hit, [], '这些选择器已经没有对应元素：' + hit.join('、'));
+  });
+
+  await t('「我的」菜单里有空间 ID / 切换空间 / 成长条 / 公告红点', async function () {
+    assert.ok(appjs.indexOf("'<button class=\"btn ghost sm me-switch\" id=\"meSwitchSpace\"") >= 0, '缺切换空间');
+    assert.ok(appjs.indexOf('空间 ID ') >= 0, '缺空间 ID');
+    assert.ok(appjs.indexOf('id="mePetLine"') >= 0, '缺成长条');
+    assert.ok(appjs.indexOf('me-badge') >= 0, '公告未读红点要跟过来');
+  });
+
+  await t('成长条 HTML 抽成了单一来源（两个渲染点不许各写一份）', async function () {
+    assert.ok(appjs.indexOf('function petLineHTML(p, unlocks)') >= 0, '要有 petLineHTML');
+    const n = (appjs.match(/petLineHTML\(/g) || []).length;
+    assert.ok(n >= 3, '定义 1 处 + 调用 2 处（菜单渲染、原地刷新），实际 ' + n);
+    assert.strictEqual((appjs.match(/pet-bar/g) || []).length, 1, 'pet-bar 只该在 petLineHTML 里出现一次');
+  });
+
+  await t('切换空间要真的退出到空间门', async function () {
+    assert.ok(appjs.indexOf("const sw = $('#meSwitchSpace');") >= 0, '要绑定点击');
+    assert.ok(appjs.indexOf("if (sw) sw.addEventListener('click', () => { closeModal(); signOut(); });") >= 0,
+      '点切换空间应该关菜单 + 退出到门');
+  });
+}
+
+// ============================================================
 (async function main() {
   console.log('临时数据目录：' + TMP);
   try {
@@ -918,6 +973,7 @@ async function modeTests() {
     await ttsSlotTests();
     await visualizeTests();
     await modeTests();
+    await myMenuTests();
   } catch (e) {
     console.error('\n测试运行器本身出错：', e);
     fail++;

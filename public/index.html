@@ -166,20 +166,13 @@
 <div class="app" id="app" style="display:none">
 
   <aside class="side" id="side">
+    <!-- 空间卡（ID / 切换）、成长条、公告都收进了右上角的「我的」菜单。
+         原来它们钉在这儿，占掉 190px 竖向空间，而项目/对话列表才是学生真正在用的 ——
+         一个 268px 宽的侧栏，顶部四分之一用来放"你叫什么、几级了"，不划算。
+         空间名在「我的」chip 上一直可见，ID 与等级点开就有。 -->
     <div class="brand">
       <b>后浪奔涌</b>
       <small>AI 学习平台</small>
-      <div class="space-pill" id="spacePill">
-        <div class="sp-txt">
-          <span id="spaceName"></span>
-          <span id="spaceIdChip" title="点击复制空间 ID"></span>
-        </div>
-        <button class="btn ghost sm" id="switchSpace" type="button">切换</button>
-      </div>
-      <div class="pet-line" id="petLine" title="成长值来自知识卡状态推进，不来自在线时长"></div>
-      <div class="ann-line">
-        <button class="btn ghost sm" id="annBtn" type="button"><span class="nav-txt">公告</span><span class="badge" id="annBadge" hidden></span></button>
-      </div>
     </div>
 
     <!-- ★ 顶级导航只留两根：对话 / 知识库。

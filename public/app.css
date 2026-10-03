@@ -236,22 +236,13 @@ button { cursor: pointer; }
   overflow: hidden;
   transition: width .18s ease, flex-basis .18s ease;
 }
-.brand { padding: 18px 16px 12px; border-bottom: 1px solid var(--line); }
+/* 侧栏顶部只留品牌名 —— 空间卡 / 成长条 / 公告已收进右上角「我的」菜单
+   （2026-10-04）。原来那块占 190px 竖向空间，而项目与对话列表才是学生天天在用的。 */
+.brand { padding: 16px 16px 13px; border-bottom: 1px solid var(--line); }
 .brand > b { font-size: 1.05rem; font-weight: 700; letter-spacing: .02em; }
 .brand > small { display: block; color: var(--dim2); font-size: .72rem; margin-top: 1px; }
-.space-pill {
-  margin-top: 12px; background: var(--panel-2); border-radius: var(--r-sm);
-  padding: 9px 10px; display: flex; align-items: center; gap: 8px;
-}
-.sp-txt { flex: 1; min-width: 0; }
-.sp-txt #spaceName { display: block; font-weight: 600; font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sp-txt #spaceIdChip {
-  display: inline-block; font-family: var(--mono); font-size: .68rem;
-  color: var(--dim); cursor: pointer; letter-spacing: .03em;
-  border-radius: 4px; padding: 0 3px; margin-left: -3px;
-}
-.sp-txt #spaceIdChip:hover { color: var(--pri); background: var(--pri-soft); }
-.pet-line { margin-top: 10px; font-size: .76rem; color: var(--dim); display: flex; align-items: center; gap: 6px; cursor: default; }
+/* .pet-line 的基准样式保留：成长条现在渲染在「我的」菜单里，用的是同一个类。 */
+.pet-line { font-size: .76rem; color: var(--dim); display: flex; align-items: center; gap: 6px; cursor: default; }
 .pet-line .pet-ico { font-size: .95rem; line-height: 1; }
 .pet-line .pet-bar { flex: 1; height: 4px; background: var(--panel-3); border-radius: 3px; overflow: hidden; }
 .pet-line .pet-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--ok), #86EFAC); border-radius: 3px; transition: width .6s cubic-bezier(.22,.8,.3,1); }
@@ -1376,6 +1367,16 @@ button { cursor: pointer; }
 .me-mi b { font-size: .9rem; }
 .me-mi span { font-size: .76rem; color: var(--dim2); }
 .me-mi.danger b { color: var(--bad); }
+/* 「我的」菜单里的空间卡与成长条（原侧栏顶部那块，2026-10-04 挪过来）。
+   .pet-line 的基准样式在上面，这里只补它在菜单里的间距 ——
+   菜单里没有侧栏那条竖线的约束，左右留白跟 .me-mi 对齐即可。 */
+.me-head .me-switch { margin-left: auto; flex: 0 0 auto; }
+.me-pet {
+  margin: 0 0 10px; padding: 8px 10px;
+  background: var(--panel-2); border-radius: var(--r-sm);
+}
+.me-mi b { display: flex; align-items: center; gap: 6px; }
+.me-mi .me-badge { margin-left: 0; }
 
 /* ================= 英语 · 单元四关 + 艾宾浩斯（批次24）=================
    ★ 基准样式一律写在所有 @media 之前：同权重后写的赢，
@@ -1748,10 +1749,7 @@ button { cursor: pointer; }
 .land-link:hover { text-decoration: underline; }
 .land-link[disabled] { color: var(--dim2); cursor: default; text-decoration: none; }
 
-/* --- 侧栏：公告入口 --- */
-.ann-line { margin-top: 8px; }
-.ann-line .btn { width: 100%; position: relative; }
-.ann-line .badge { position: absolute; top: -5px; right: -5px; }
+/* 公告入口原来在侧栏（.ann-line），现在收进「我的」菜单，样式不再需要 */
 .ann-item { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .ann-item:last-child { border-bottom: 0; }
 .ann-item .ah { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -1810,8 +1808,6 @@ button { cursor: pointer; }
 /* ---- 侧栏收起（只留图标）---- */
 .app.side-min .side { width: 66px; flex-basis: 66px; }
 .app.side-min .brand > small,
-.app.side-min .sp-txt,
-.app.side-min .pet-line,
 .app.side-min .nav-txt,
 .app.side-min .side-h span,
 .app.side-min .conv-filter,
@@ -1821,8 +1817,6 @@ button { cursor: pointer; }
 .app.side-min .side-h #newConv { display: none; }
 .app.side-min .brand { padding: 16px 8px 10px; text-align: center; }
 .app.side-min .brand > b { font-size: .82rem; }
-.app.side-min .space-pill { justify-content: center; padding: 6px 4px; }
-.app.side-min .space-pill .btn { display: none; }
 .app.side-min .nav { padding: 8px 6px; }
 .app.side-min .nav-i { justify-content: center; padding: .6em 0; font-size: 1rem; }
 .app.side-min .conv-i { justify-content: center; }
