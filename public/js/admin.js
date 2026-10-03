@@ -286,6 +286,126 @@
     }).catch(function (e) { alert(e.message); });
   }
 
+  // ---------- TTS 切换 ----------
+  function loadTts() {
+    return api('/api/admin/tts')
+      .then(function (j) { renderTts(j.config || {}, j.voices || {}); })
+      .catch(handleAuthError);
+  }
+
+  function saveTts(patch) {
+    return api('/api/admin/tts', {
+      method: 'POST',
+      body: JSON.stringify(patch),
+    }).then(function (j) { renderTts(j.config || {}, j.voices || {}); alert('TTS 配置已保存'); })
+      .catch(function (e) { alert(e.message || '保存失败'); });
+  }
+
+  function testTts() {
+    var btn = $('#adTtsTest');
+    if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+    var text = ($('#adTtsTestText') || {}).value || '你好，这是 TTS 测试。';
+    api('/api/admin/tts/test', {
+      method: 'POST',
+      body: JSON.stringify({ text: text }),
+    }).then(function (r) {
+      if (r.mode === 'audio' && r.audio) {
+        // 直接 Base64 播放
+        var a = new Audio('data:' + (r.mime || 'audio/mpeg') + ';base64,' + r.audio);
+        a.play();
+        alert('测试朗读已播放（' + (r.provider || '未知') + '）');
+      } else if (r.mode === 'url' && r.url) {
+        var a2 = new Audio(r.url); a2.play();
+        alert('测试朗读已播放（URL 模式）');
+      } else {
+        var synth = window.speechSynthesis;
+        if (synth) {
+          var u = new SpeechSynthesisUtterance(text);
+          if (r.rate) u.rate = Number(r.rate) || 1;
+          synth.speak(u);
+        }
+        alert('已用浏览器语音合成播放（' + (r.note || '降级模式') + '）');
+      }
+    }).catch(function (e) {
+      alert('测试失败：' + (e.message || '未知错误'));
+    }).finally(function () {
+      if (btn) { btn.disabled = false; btn.textContent = '测试朗读'; }
+    });
+  }
+
+  function renderTts(cfg, voices) {
+    var host = $('#adTts');
+    var providers = [
+      { id: 'custom', name: '自定义' },
+      { id: 'siliconflow', name: 'SiliconFlow' },
+      { id: 'openai', name: 'OpenAI 官方' },
+      { id: 'openai-compatible', name: 'OpenAI 兼容' },
+    ];
+    var provOpts = providers.map(function (p) {
+      return '<option value="' + esc(p.id) + '"' + (cfg.kind === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+    }).join('');
+
+    // 音色快速选择：按当前 provider 列出已知候选
+    var voiceOpts = '';
+    if (voices && voices.voices && voices.voices.length) {
+      voiceOpts = '<datalist id="adTtsVoiceList">' +
+        voices.voices.map(function (v) { return '<option value="' + esc(v) + '">'; }).join('') +
+        '</datalist>';
+    }
+
+    var envNote = function (label, cur, env, over) {
+      return '<div class="dim" style="font-size:.74rem;margin-top:2px">' +
+        '当前生效 <b>' + esc(cur || '—') + '</b> · ' +
+        (over ? '<span style="color:var(--pri)">已覆盖</span> · ' : '') +
+        '环境变量 ' + esc(env || '未设置') + ' · ' + esc(label) + '</div>';
+    };
+
+    host.innerHTML =
+      '<div class="ad-tts-row">' +
+        '<label>服务商</label>' +
+        '<select id="adTtsProvider">' + provOpts + '</select>' +
+        envNote('留空恢复环境变量', cfg.kind, cfg.envKind, cfg.overridden && cfg.overridden.kind) +
+      '</div>' +
+      '<div class="ad-tts-row">' +
+        '<label>模型</label>' +
+        '<input type="text" id="adTtsModel" value="' + esc(cfg.model || '') + '" placeholder="如 FunAudioLLM/CosyVoice2-0.5B">' +
+        envNote('留空恢复环境变量', cfg.model, cfg.envModel, cfg.overridden && cfg.overridden.model) +
+      '</div>' +
+      '<div class="ad-tts-row">' +
+        '<label>音色</label>' +
+        '<input type="text" id="adTtsVoice" value="' + esc(cfg.voice || '') + '" placeholder="如 alex" list="adTtsVoiceList">' + voiceOpts +
+        envNote('留空恢复环境变量', cfg.voice, cfg.envVoice, cfg.overridden && cfg.overridden.voice) +
+      '</div>' +
+      '<div class="ad-tts-row">' +
+        '<label>接口地址</label>' +
+        '<input type="text" id="adTtsUrl" value="' + esc(cfg.url || '') + '" placeholder="https://api.xxx.com/v1">' +
+        envNote('留空恢复环境变量', cfg.url, cfg.envUrl, cfg.overridden && cfg.overridden.url) +
+      '</div>' +
+      '<div class="ad-tts-row">' +
+        '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
+          '<input type="checkbox" id="adTtsEnabled"' + (cfg.enabled ? ' checked' : '') + '> 启用外部 TTS' +
+        '</label>' +
+        '<div class="dim" style="font-size:.74rem;margin-top:2px">' +
+          '当前 ' + (cfg.enabled ? '启用' : '关闭') + ' · ' +
+          (cfg.overridden && cfg.overridden.enabled ? '<span style="color:var(--pri)">已覆盖</span> · ' : '') +
+          '环境变量 ' + (cfg.envEnabled ? '启用' : '关闭') +
+          (cfg.hasKey ? ' · Key 已配置' : ' · <span style="color:var(--coral-600)">Key 未配置</span>') +
+        '</div>' +
+      '</div>' +
+      '<div class="ad-tts-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">' +
+        '<button class="btn sm pri" id="adTtsSave">保存</button>' +
+        '<button class="btn sm ghost" id="adTtsReset">恢复默认</button>' +
+        '<span style="flex:1"></span>' +
+        '<input type="text" id="adTtsTestText" value="你好，这是 TTS 测试。" placeholder="测试文本" style="max-width:220px;font-size:.78rem">' +
+        '<button class="btn sm" id="adTtsTest">测试朗读</button>' +
+      '</div>';
+
+    // provider 切了要重拉候选音色
+    $('#adTtsProvider').addEventListener('change', function () {
+      saveTts({ provider: this.value });
+    });
+  }
+
   // ---------- 渲染：空间列表 ----------
   function renderSpaces(list) {
     if (!list || !list.length) { $('#adSpaces').innerHTML = '<div class="ad-empty">还没有学习空间</div>'; return; }
@@ -499,6 +619,7 @@
     loadSpaces();
     loadConvs();
     loadModels();
+    loadTts();
   }
 
   function loadOverview() {
@@ -605,6 +726,25 @@
       var reset = e.target.closest('[data-mreset]');
       if (reset) { setModel(reset.getAttribute('data-mreset'), ''); return; }
       if (e.target.closest('#adModelRefresh')) { loadModels(true); }
+    });
+
+    // TTS 面板：保存 / 恢复默认 / 测试朗读
+    $('#adTts').addEventListener('click', function (e) {
+      if (e.target.closest('#adTtsSave')) {
+        saveTts({
+          provider: $('#adTtsProvider').value,
+          model: $('#adTtsModel').value,
+          voice: $('#adTtsVoice').value,
+          baseUrl: $('#adTtsUrl').value,
+          enabled: $('#adTtsEnabled').checked,
+        });
+        return;
+      }
+      if (e.target.closest('#adTtsReset')) {
+        saveTts({ provider: '', model: '', voice: '', baseUrl: '', enabled: '' });
+        return;
+      }
+      if (e.target.closest('#adTtsTest')) { testTts(); }
     });
   }
 

@@ -678,6 +678,91 @@ async function reasonTests() {
 }
 
 // ============================================================
+// 六、TTS 切换（管理员看板）
+// ============================================================
+async function ttsSlotTests() {
+  group('六、TTS 切换');
+  clearTtsEnv(); // 前面的测试可能残留 env，先清干净
+
+  await t('默认读到空环境变量（未配 TTS）', async function () {
+    const s = chat.ttsSlot();
+    assert.strictEqual(s.kind, 'custom', '未配 provider 时默认 custom');
+    assert.strictEqual(s.model, '', '未配 model');
+    assert.strictEqual(s.voice, '', '未配 voice');
+    assert.strictEqual(s.enabled, false, '未配 url → enabled=false');
+    assert.strictEqual(s.hasKey, false, '未配 key');
+  });
+
+  await t('设置 provider / model / voice / enabled / baseUrl', async function () {
+    chat.setTtsSlot({ provider: 'siliconflow', model: 'FunAudioLLM/CosyVoice2-0.5B', voice: 'alex', baseUrl: 'https://api.siliconflow.cn/v1', enabled: true });
+    const s = chat.ttsSlot();
+    assert.strictEqual(s.kind, 'siliconflow');
+    assert.strictEqual(s.model, 'FunAudioLLM/CosyVoice2-0.5B');
+    assert.strictEqual(s.voice, 'alex');
+    assert.strictEqual(s.enabled, true);
+    assert.ok(s.url.indexOf('/audio/speech') >= 0, 'openai 类 provider 自动补 /audio/speech，实际：' + s.url);
+    assert.ok(s.overridden.kind);
+    assert.ok(s.overridden.model);
+    assert.ok(s.overridden.voice);
+    assert.ok(s.overridden.enabled);
+  });
+
+  await t('覆盖立刻反映在 ttsSlot（下一次朗读就用新配置）', async function () {
+    assert.strictEqual(chat.ttsSlot().kind, 'siliconflow');
+    assert.strictEqual(chat.ttsSlot().voice, 'alex');
+  });
+
+  await t('传空串恢复环境变量的值', async function () {
+    chat.setTtsSlot({ provider: '', model: '', voice: '', baseUrl: '', enabled: '' });
+    const s = chat.ttsSlot();
+    assert.strictEqual(s.kind, 'custom');
+    assert.strictEqual(s.model, '');
+    assert.strictEqual(s.voice, '');
+    assert.strictEqual(s.enabled, false);
+    assert.ok(!s.overridden.kind);
+    assert.ok(!s.overridden.model);
+  });
+
+  await t('非法 provider 抛 BAD_PROVIDER', async function () {
+    let err = null;
+    try { chat.setTtsSlot({ provider: 'bad-one' }); } catch (e) { err = e; }
+    assert.ok(err);
+    assert.strictEqual(err.code, 'BAD_PROVIDER');
+  });
+
+  await t('非法 URL 抛 BAD_URL', async function () {
+    let err = null;
+    try { chat.setTtsSlot({ baseUrl: 'not-a-url' }); } catch (e) { err = e; }
+    assert.ok(err);
+    assert.strictEqual(err.code, 'BAD_URL');
+  });
+
+  await t('超长 model / voice 抛 BAD_MODEL / BAD_VOICE', async function () {
+    let e1 = null, e2 = null;
+    try { chat.setTtsSlot({ model: 'x'.repeat(200) }); } catch (e) { e1 = e; }
+    try { chat.setTtsSlot({ voice: 'y'.repeat(200) }); } catch (e) { e2 = e; }
+    assert.strictEqual(e1 && e1.code, 'BAD_MODEL');
+    assert.strictEqual(e2 && e2.code, 'BAD_VOICE');
+  });
+
+  await t('音色候选按 provider 过滤', async function () {
+    chat.setTtsSlot({ provider: 'siliconflow' });
+    const v1 = chat.ttsVoiceCandidates();
+    assert.ok(v1.voices.indexOf('alex') >= 0, 'siliconflow 应包含 alex');
+    assert.ok(v1.voices.indexOf('alloy') < 0, 'siliconflow 不应包含 alloy');
+
+    chat.setTtsSlot({ provider: 'openai' });
+    const v2 = chat.ttsVoiceCandidates();
+    assert.ok(v2.voices.indexOf('alloy') >= 0, 'openai 应包含 alloy');
+    assert.ok(v2.voices.indexOf('alex') < 0, 'openai 不应包含 alex');
+
+    chat.setTtsSlot({ provider: 'custom' });
+    const v3 = chat.ttsVoiceCandidates();
+    assert.strictEqual(v3.voices.length, 0, 'custom 没有预设音色');
+  });
+}
+
+// ============================================================
 (async function main() {
   console.log('临时数据目录：' + TMP);
   try {
@@ -686,6 +771,7 @@ async function reasonTests() {
     await seqTests();
     await modelTests();
     await reasonTests();
+    await ttsSlotTests();
   } catch (e) {
     console.error('\n测试运行器本身出错：', e);
     fail++;

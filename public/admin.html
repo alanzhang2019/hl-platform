@@ -95,6 +95,15 @@
 .ad-crumb a { color: var(--pri); cursor: pointer; }
 .ad-empty { font-size: .82rem; color: var(--dim2); padding: 18px 4px; text-align: center; }
 .ad-pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; font-size: .78rem; color: var(--dim); }
+
+/* TTS 切换 */
+.ad-tts-row { margin-bottom: 12px; }
+.ad-tts-row label { font-size: .78rem; color: var(--dim); display: block; margin-bottom: 4px; }
+.ad-tts-row select, .ad-tts-row input[type="text"] {
+  font: inherit; font-size: .82rem; padding: .42em .6em; border-radius: var(--r-xs);
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--txt); width: 100%; max-width: 360px;
+}
+.ad-tts-row select { width: auto; min-width: 160px; }
 </style>
 </head>
 <body>
@@ -137,6 +146,12 @@
       <h3>模型切换</h3>
       <div class="hint">改完下一次对话立即生效，不用重启。留空即恢复部署时环境变量配的模型。</div>
       <div id="adModels"></div>
+    </section>
+
+    <section class="ad-panel">
+      <h3>TTS 切换</h3>
+      <div class="hint">朗读音色、模型、服务商均可改，改完下一条朗读立即生效。留空即恢复环境变量。</div>
+      <div id="adTts"></div>
     </section>
 
     <div class="ad-grid">

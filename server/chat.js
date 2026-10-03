@@ -77,6 +77,108 @@ function ttsConfig() {
   };
 }
 
+// ============================================================
+// TTS 运行时覆盖（管理员看板切换 provider/model/voice/enabled/baseUrl）
+// ============================================================
+// ★ 设计跟 llm.js 的 setModelSlot 一致：值存 meta 表，优先于环境变量；
+//   传空串/null/undefined = 清掉覆盖，回到部署时环境变量配的那个。
+//   前端不用重启，改完下一条朗读就用新配置。
+const TTS_META_KEY = {
+  provider: 'tts:provider',
+  model: 'tts:model',
+  voice: 'tts:voice',
+  baseUrl: 'tts:baseUrl',
+  enabled: 'tts:enabled',
+};
+
+/** 返回带覆盖值与 env 原值的完整配置，字段名与 ttsConfig() 一致（兼容 speak()） */
+function ttsSlot() {
+  const env = ttsConfig();
+  const provider = String(D.metaGet(TTS_META_KEY.provider, '') || env.kind || 'custom').trim();
+  const model    = String(D.metaGet(TTS_META_KEY.model, '')    || env.model).trim();
+  const voice    = String(D.metaGet(TTS_META_KEY.voice, '')    || env.voice).trim();
+  const baseUrl  = String(D.metaGet(TTS_META_KEY.baseUrl, '')  || env.url).trim();
+  const enabledRaw = String(D.metaGet(TTS_META_KEY.enabled, '')).trim();
+
+  const isOpenAI = !!OPENAI_TTS_KINDS[provider];
+  let url = baseUrl;
+  if (isOpenAI && url && !/\/audio\/speech\/?$/.test(url)) {
+    url = url.replace(/\/+$/, '') + '/audio/speech';
+  }
+  const isEnabled = enabledRaw === '' ? env.enabled : (enabledRaw === '1' || enabledRaw === 'true');
+
+  return {
+    kind: provider,
+    protocol: isOpenAI ? 'openai' : 'custom',
+    url: url,
+    key: env.key,
+    model: model,
+    voice: voice,
+    enabled: isEnabled,
+    hasKey: !!env.key,
+    envKind: env.kind || 'custom',
+    envModel: env.model,
+    envVoice: env.voice,
+    envUrl: env.url,
+    envEnabled: env.enabled,
+    overridden: {
+      kind: provider !== (env.kind || 'custom'),
+      model: model !== env.model,
+      voice: voice !== env.voice,
+      url: url !== env.url,
+      enabled: isEnabled !== env.enabled,
+    },
+  };
+}
+
+/** 设置 TTS 运行时覆盖。传空串 / null / undefined = 清掉覆盖。 */
+function setTtsSlot(patch) {
+  const env = ttsConfig();
+  const toSave = {};
+  if (patch.provider !== undefined) {
+    const v = String(patch.provider === null ? '' : patch.provider).trim().toLowerCase();
+    if (v && !/^(custom|siliconflow|openai|openai-compatible)$/.test(v)) {
+      const e = new Error('不支持的 TTS 提供商：' + v); e.code = 'BAD_PROVIDER'; throw e;
+    }
+    toSave.provider = v;
+  }
+  if (patch.model !== undefined) {
+    const v = String(patch.model === null ? '' : patch.model).trim();
+    if (v.length > 120) { const e = new Error('模型名过长（120 字符以内）'); e.code = 'BAD_MODEL'; throw e; }
+    toSave.model = v;
+  }
+  if (patch.voice !== undefined) {
+    const v = String(patch.voice === null ? '' : patch.voice).trim();
+    if (v.length > 120) { const e = new Error('音色名过长（120 字符以内）'); e.code = 'BAD_VOICE'; throw e; }
+    toSave.voice = v;
+  }
+  if (patch.baseUrl !== undefined) {
+    const v = String(patch.baseUrl === null ? '' : patch.baseUrl).trim();
+    if (v && !/^https?:\/\/.+/.test(v)) { const e = new Error('URL 不合法（必须以 http:// 或 https:// 开头）'); e.code = 'BAD_URL'; throw e; }
+    toSave.baseUrl = v;
+  }
+  if (patch.enabled !== undefined) {
+    toSave.enabled = (patch.enabled === true || patch.enabled === 'true' || patch.enabled === '1') ? '1' : '0';
+  }
+  Object.keys(toSave).forEach(function (k) { D.metaSet(TTS_META_KEY[k], toSave[k]); });
+  return ttsSlot();
+}
+
+/** 各 provider 的已知音色候选（快速选择用），不全限制，管理员仍可手填。 */
+function ttsVoiceCandidates() {
+  const slot = ttsSlot();
+  const known = {
+    siliconflow: ['alex', 'anna', 'bella', 'benjamin', 'charlotte', 'claire', 'david', 'diana'],
+    openai: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'],
+    'openai-compatible': [],
+    custom: [],
+  };
+  return {
+    provider: slot.kind,
+    voices: known[slot.kind] || [],
+  };
+}
+
 /**
  * SiliconFlow 的音色必须带模型前缀（`FunAudioLLM/CosyVoice2-0.5B:alex`），
  * 只写 `alex` 会 400。这里自动补全，免得管理员在设置里填个短名就整条朗读坏掉。
@@ -142,7 +244,7 @@ async function speak(spaceId, userId, { text, rate, voice } = {}) {
   }
   const pref = getTtsPref(spaceId, userId);
   const useRate = rate === undefined ? pref.rate : clampRate(rate);
-  const cfg = ttsConfig();
+  const cfg = ttsSlot();
   // 音色优先级：本次请求 > 用户偏好 > 环境变量默认值。补前缀放在最后一步。
   let useVoice = normalizeTtsVoice(cfg, voice === undefined ? pref.voice : String(voice || '').slice(0, 80));
   if (!useVoice) useVoice = normalizeTtsVoice(cfg, cfg.voice);
@@ -1421,7 +1523,7 @@ async function describeAttachments(spaceId, atts) {
 
 module.exports = {
   // TTS
-  TTS_MAX_CHARS, speak, getTtsPref, setTtsPref, clampRate,
+  TTS_MAX_CHARS, speak, getTtsPref, setTtsPref, clampRate, ttsSlot, setTtsSlot, ttsVoiceCandidates,
   // 翻译
   DIRECTIONS, detectDirection, translateMessage,
   // 搜索（planWebSearch = 搜之前的意图判断与检索词提炼，见函数注释）

@@ -69,7 +69,7 @@ const adminDash = require('./server/admin');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-03-admin-dash3';
+const APP_VERSION = '2026-10-03-admin-dash4';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -808,6 +808,35 @@ async function handleApi(req, res, u) {
     } catch (e) {
       const code = e.code || 'SET_FAILED';
       return sendJSON(res, code === 'BAD_SLOT' || code === 'BAD_MODEL' ? 400 : 500, { error: code, message: e.message });
+    }
+  }
+
+  // ---------- 管理员：TTS 切换（2026-10-03 新增）----------
+  // provider / model / voice / enabled / baseUrl 均可改，值存 meta 表优先于环境变量。
+  if (p === '/api/admin/tts' && method === 'GET') {
+    if (!requireAdmin(res)) return;
+    return sendJSON(res, 200, { ok: true, config: chat.ttsSlot(), voices: chat.ttsVoiceCandidates() });
+  }
+  if (p === '/api/admin/tts' && method === 'POST') {
+    if (!requireAdmin(res)) return;
+    const b = await readBody(req);
+    try {
+      const cfg = chat.setTtsSlot(b);
+      return sendJSON(res, 200, { ok: true, config: cfg });
+    } catch (e) {
+      const code = e.code || 'SET_FAILED';
+      return sendJSON(res, code === 'BAD_PROVIDER' || code === 'BAD_MODEL' || code === 'BAD_VOICE' || code === 'BAD_URL' ? 400 : 500, { error: code, message: e.message });
+    }
+  }
+  // 管理员测试朗读（不走学习空间令牌，直接用管理员令牌调 speak）
+  if (p === '/api/admin/tts/test' && method === 'POST') {
+    if (!requireAdmin(res)) return;
+    const b = await readBody(req);
+    try {
+      const r = await chat.speak(null, null, { text: b.text || '你好，这是 TTS 测试。', rate: b.rate, voice: b.voice });
+      return sendJSON(res, 200, { ok: true, ...r });
+    } catch (e) {
+      return sendJSON(res, 500, { error: e.code || 'SPEAK_FAILED', message: e.message });
     }
   }
 
