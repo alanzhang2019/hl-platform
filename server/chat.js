@@ -38,14 +38,56 @@ const TTS_MAX_CHARS = 5000;
 const TTS_RATE_MIN = 0.5;
 const TTS_RATE_MAX = 2.0;
 
+/**
+ * ★ 2026-10-03 改造：从"只有一个通用 URL"扩成 provider 适配层。
+ *
+ * 起因：线上一直没配 TTS_PROVIDER_URL，朗读静默降级成浏览器 SpeechSynthesis，
+ * 音色很机械（用户直接反馈"很机械"）。而平台用的模型网关（qnaigc）上
+ * 81 个模型里**没有任何语音合成模型** —— minimax/minimax-m2.5-highspeed 是文本 LLM，
+ * 拿它做 TTS 是不通的。所以必须接一个真正的外部 TTS。
+ *
+ * 两种上游协议：
+ *   · kind='siliconflow' | 'openai' | 'openai-compatible'（OpenAI 兼容）
+ *       POST {base}/audio/speech
+ *       body { model, input, voice, speed, response_format:'mp3' }  ← 直接回音频字节
+ *   · kind=''（默认，向后兼容）
+ *       POST TTS_PROVIDER_URL
+ *       body { text, voice, rate, format:'mp3' }  ← 回音频字节，或 JSON {audio|audioBase64|data|url}
+ *
+ * ★ base 两种写法都认：填 https://api.siliconflow.cn/v1 或直接填到 .../v1/audio/speech。
+ *   少一个斜杠、多一个斜杠都不该让朗读整个坏掉。
+ */
+const OPENAI_TTS_KINDS = { openai: 1, siliconflow: 1, 'openai-compatible': 1 };
+
 function ttsConfig() {
-  const url = (process.env.TTS_PROVIDER_URL || '').trim();
+  const kind = (process.env.TTS_PROVIDER || '').trim().toLowerCase();
+  const isOpenAI = !!OPENAI_TTS_KINDS[kind];
+  let url = (process.env.TTS_BASE_URL || process.env.TTS_PROVIDER_URL || '').trim();
+  if (isOpenAI && url && !/\/audio\/speech\/?$/.test(url)) {
+    url = url.replace(/\/+$/, '') + '/audio/speech';
+  }
   return {
+    kind: kind,                                   // 原始取值，用于判断要不要补音色前缀
+    protocol: isOpenAI ? 'openai' : 'custom',
     url: url,
     key: (process.env.TTS_API_KEY || '').trim(),
+    model: (process.env.TTS_MODEL || '').trim(),
     voice: (process.env.TTS_VOICE || '').trim(),
     enabled: !!url,
   };
+}
+
+/**
+ * SiliconFlow 的音色必须带模型前缀（`FunAudioLLM/CosyVoice2-0.5B:alex`），
+ * 只写 `alex` 会 400。这里自动补全，免得管理员在设置里填个短名就整条朗读坏掉。
+ * ★ 只对 siliconflow 生效 —— OpenAI 官方 TTS 的音色（alloy/nova…）本来就没有冒号，
+ *   统一补前缀会把它们弄坏。
+ */
+function normalizeTtsVoice(cfg, voice) {
+  const v = String(voice || '').trim();
+  if (!v) return '';
+  if (cfg.kind === 'siliconflow' && cfg.model && v.indexOf(':') < 0) return cfg.model + ':' + v;
+  return v;
 }
 
 /**
@@ -100,8 +142,10 @@ async function speak(spaceId, userId, { text, rate, voice } = {}) {
   }
   const pref = getTtsPref(spaceId, userId);
   const useRate = rate === undefined ? pref.rate : clampRate(rate);
-  const useVoice = voice === undefined ? pref.voice : String(voice || '').slice(0, 80);
   const cfg = ttsConfig();
+  // 音色优先级：本次请求 > 用户偏好 > 环境变量默认值。补前缀放在最后一步。
+  let useVoice = normalizeTtsVoice(cfg, voice === undefined ? pref.voice : String(voice || '').slice(0, 80));
+  if (!useVoice) useVoice = normalizeTtsVoice(cfg, cfg.voice);
 
   if (!cfg.enabled) {
     return {
@@ -111,29 +155,54 @@ async function speak(spaceId, userId, { text, rate, voice } = {}) {
     };
   }
   try {
+    // OpenAI 兼容协议（SiliconFlow 等）的字段名与"通用自定义"完全不同：
+    //   前者 input/model/response_format，后者 text/rate/format。
+    // 混着发会 400，所以这里必须分叉，不能只改 URL 就指望能用。
+    const payload = cfg.protocol === 'openai'
+      ? {
+          model: cfg.model || undefined,
+          input: raw,
+          voice: useVoice || undefined,
+          speed: useRate,
+          response_format: 'mp3',
+        }
+      : { text: raw, voice: useVoice, rate: useRate, format: 'mp3' };
     const res = await fetch(cfg.url, {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' },
         cfg.key ? { Authorization: 'Bearer ' + cfg.key } : {}),
-      body: JSON.stringify({ text: raw, voice: useVoice || cfg.voice, rate: useRate, format: 'mp3' }),
+      body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error('朗读服务返回 ' + res.status);
+    if (!res.ok) {
+      // ★ 把上游的响应体带进错误里。只报 "返回 400" 的话，音色写错、模型写错、
+      //   Key 过期这三种情况长得一模一样，排查只能靠猜。
+      let detail = '';
+      try { detail = (await res.text()).slice(0, 300); } catch (_) {}
+      const err = new Error('朗读服务返回 ' + res.status + (detail ? '：' + detail : ''));
+      err.status = res.status;
+      throw err;
+    }
     const ct = (res.headers.get('content-type') || '').toLowerCase();
     if (ct.indexOf('application/json') >= 0) {
       const j = await res.json();
       const audio = j.audio || j.audioBase64 || j.data || '';
-      if (audio) return { mode: 'audio', audio: audio, mime: j.mime || 'audio/mpeg', rate: useRate, maxChars: TTS_MAX_CHARS };
-      if (j.url) return { mode: 'url', url: j.url, rate: useRate, maxChars: TTS_MAX_CHARS };
+      if (audio) return { mode: 'audio', audio: audio, mime: j.mime || 'audio/mpeg', rate: useRate, maxChars: TTS_MAX_CHARS, provider: cfg.kind || 'custom' };
+      if (j.url) return { mode: 'url', url: j.url, rate: useRate, maxChars: TTS_MAX_CHARS, provider: cfg.kind || 'custom' };
       throw new Error('朗读服务没有返回音频');
     }
     const buf = Buffer.from(await res.arrayBuffer());
-    return { mode: 'audio', audio: buf.toString('base64'), mime: ct || 'audio/mpeg', rate: useRate, maxChars: TTS_MAX_CHARS };
+    return { mode: 'audio', audio: buf.toString('base64'), mime: ct || 'audio/mpeg', rate: useRate, maxChars: TTS_MAX_CHARS, provider: cfg.kind || 'custom' };
   } catch (e) {
-    // 上游挂了不能让"朗读"整个不可用 —— 退回浏览器合成，并把原因带回去
+    // 上游挂了不能让"朗读"整个不可用 —— 退回浏览器合成，并把原因带回去。
+    // ★ 原因分两层放：
+    //   note   给用户看，只说"降级了"，不把上游的 500/400 甩到他脸上；
+    //   detail 给日志和运维看，带上游响应体 —— 排查时不必再猜是音色写错、
+    //          模型写错还是 Key 过期（这三种在只报状态码时长得一模一样）。
     return {
       mode: 'browser', text: raw, rate: useRate, voice: useVoice,
       maxChars: TTS_MAX_CHARS, degraded: true,
       note: '朗读服务暂时不可用，已改用浏览器语音合成',
+      detail: String((e && e.message) || e).slice(0, 300),
     };
   }
 }

@@ -6,6 +6,8 @@
  *   【绝不直接给答案】—— 学生卡住时，AI 只做三件事：反问、给脚手架、指出思路的岔口。
  *   这不是"语气温柔"，是硬约束：模型被要求先判断学生已走到哪一步，再决定追问什么。
  */
+const D = require('./db');
+
 const LLM_BASE_URL = (process.env.LLM_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
 const LLM_API_KEY = process.env.LLM_API_KEY || '';
 const LLM_MODEL = process.env.LLM_MODEL || 'deepseek-chat';
@@ -26,8 +28,101 @@ const MODELS = [
   },
 ];
 
-function resolveModel(id) {
+// ============================================================
+// 模型档位的运行时可覆盖配置（管理员后台切换）
+// ============================================================
+/**
+ * 「通用」和「深度思考」这两个档位背后真实用哪个模型，
+ * 以前只能改环境变量再重启容器 —— 管理员想换个更强的模型
+ * （比如把深度思考换成 deepseek/deepseek-v4-pro-0813）得上服务器改文件、重启，
+ * 在"试哪个模型效果好"这件事上慢到没法用。
+ *
+ * 现在后台能直接改：值存 meta 表，**优先于环境变量**，改完下一次对话就生效。
+ * 存空串 = 清掉覆盖，回到部署时环境变量配的那个。
+ */
+const SLOT_META_KEY = { default: 'llm:model:default', deep: 'llm:model:deep' };
+
+function slotEntry(id) {
   return MODELS.find(m => m.id === id) || MODELS[0];
+}
+function envModelFor(slotId) {
+  const e = slotEntry(slotId);
+  return e.id === 'deep' ? (process.env.LLM_MODEL_DEEP || LLM_MODEL) : LLM_MODEL;
+}
+/** 该档位当前实际会用的模型（DB 覆盖 > 环境变量） */
+function effectiveModel(slotId) {
+  const e = slotEntry(slotId);
+  const saved = String(D.metaGet(SLOT_META_KEY[e.id], '') || '').trim();
+  return saved || envModelFor(e.id);
+}
+
+/**
+ * ★ model 必须每次实时算，不能把值烘焙进 MODELS 常量。
+ *   管理员在后台点完保存，下一条对话就得用新模型 —— 这就是"改完立刻生效"的含义。
+ */
+function resolveModel(id) {
+  const e = slotEntry(id);
+  return Object.assign({}, e, { model: effectiveModel(e.id) });
+}
+
+/** 后台用：列出各档位及其当前模型 */
+function modelSlots() {
+  return MODELS.map(e => {
+    const m = effectiveModel(e.id), env = envModelFor(e.id);
+    return {
+      id: e.id, name: e.name, displayName: e.displayName, desc: e.desc || '',
+      color: e.color, thinking: !!e.thinking,
+      model: m, envModel: env,
+      overridden: m !== env,
+    };
+  });
+}
+
+/** 后台用：设置某档位的模型。传空串 = 恢复环境变量的值。 */
+function setModelSlot(slotId, model) {
+  const e = MODELS.find(m => m.id === slotId);
+  if (!e) { const err = new Error('没有这个模型档位：' + slotId); err.code = 'BAD_SLOT'; throw err; }
+  const v = String(model === null || model === undefined ? '' : model).trim();
+  // 不做白名单校验：目录可能拉不到、或管理员想试一个刚上线还没进目录的模型。
+  // 只挡住明显不可能是模型名的输入（有空格 / 过长）。
+  if (v && (v.length > 120 || /\s/.test(v))) {
+    const err = new Error('模型名不合法：不能有空格，长度不超过 120'); err.code = 'BAD_MODEL'; throw err;
+  }
+  D.metaSet(SLOT_META_KEY[e.id], v);
+  return modelSlots().find(s => s.id === e.id);
+}
+
+// ---------- 上游模型目录（后台下拉的候选）----------
+let _catalog = { at: 0, data: null };
+const CATALOG_TTL = 5 * 60 * 1000;
+
+/**
+ * 拉上游 /models 给后台做下拉候选。
+ * ★ 失败时**如实返回 ok:false 而不是抛错**：
+ *   目录拿不到（Key 失效、网络问题、网关改版）不该让"切换模型"这个页面打不开 ——
+ *   管理员依然可以手填模型名。候选列表只是让选择更省事，不是功能的前提。
+ */
+async function modelCatalog(force) {
+  const now = Date.now();
+  if (!force && _catalog.data && now - _catalog.at < CATALOG_TTL) {
+    return Object.assign({ source: 'cache' }, _catalog.data);
+  }
+  if (!LLM_API_KEY || LLM_API_KEY === 'mock') {
+    return { ok: false, source: 'none', models: [], error: '未配置模型接口密钥' };
+  }
+  try {
+    const res = await fetch(LLM_BASE_URL + '/models', {
+      method: 'GET',
+      headers: { Authorization: 'Bearer ' + LLM_API_KEY },
+    });
+    if (!res.ok) throw new Error('网关返回 ' + res.status);
+    const j = await res.json();
+    const ids = (j.data || []).map(m => String(m.id || '')).filter(Boolean).sort();
+    _catalog = { at: now, data: { ok: true, models: ids, error: '' } };
+    return Object.assign({ source: 'live' }, _catalog.data);
+  } catch (e) {
+    return { ok: false, source: 'error', models: [], error: String((e && e.message) || e).slice(0, 200) };
+  }
 }
 
 // ---------- 系统提示词 ----------
@@ -346,6 +441,8 @@ function parseJSONLoose(text) {
 
 module.exports = {
   MODELS, resolveModel, buildSystemPrompt, streamChat, complete, completeJSON, parseJSONLoose,
+  // 后台模型切换（2026-10-03）
+  modelSlots, setModelSlot, modelCatalog, effectiveModel,
   buildTempDocContext, TEMP_DOC_BUDGET, TEMP_DOC_PER_DOC,
   // 导出是为了能直接验 429 行为，不用真去打接口（扫描件识别会长时间占用同一配额）
   fetchWithRetry,

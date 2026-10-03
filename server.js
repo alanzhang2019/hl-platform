@@ -65,10 +65,11 @@ const english = require('./server/english');
 const exam = require('./server/exam');
 const growth = require('./server/growth');
 const pool = require('./server/pool');
+const adminDash = require('./server/admin');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-03-parity31';
+const APP_VERSION = '2026-10-03-admin-dash2';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -104,6 +105,10 @@ function serveStatic(req, res, pathname) {
   // decodeURIComponent 遇到畸形转义（如 /%）会抛异常 —— 那是客户端的问题，回 400。
   try { rel = decodeURIComponent(pathname); } catch (e) { return sendJSON(res, 400, { error: 'BAD_URL' }); }
   if (rel === '/' || rel === '') rel = '/index.html';
+  // 管理员看板是独立页面，不塞进 SPA。
+  // 为什么不走 index.html 的前端路由：它是内部工具，跟学生的对话界面没有共享状态，
+  // 单独一个 html 更小、加载更快，也不会被学生侧的任何改动牵连。
+  if (rel === '/admin' || rel === '/admin/') rel = '/admin.html';
   // 路径越界护栏。
   // ★ 不要用 startsWith 比较：'C:\proj\public-x' 是 'C:\proj\public' 的前缀，
   //   于是 /../public-x/… 这种请求能通过检查，读到一个名字以 public 开头的兄弟目录。
@@ -256,8 +261,12 @@ async function streamReply(req, res, ctx, sid, opt) {
     }));
   } catch (e) { tempDocs = []; }
 
+  // ★ 模式只算一次，prompt 与落库共用同一个值。
+  //   分开写的话，哪天默认值改了、或者某条分支忘了同步，看板上的模式分布
+  //   就会和实际生效的模式不一致 —— 一个会撒谎的统计比没有统计更坏。
+  const useMode = opt.mode || 'selfstudy';
   let system = llm.buildSystemPrompt({
-    mode: opt.mode || 'selfstudy',
+    mode: useMode,
     spaceName: (auth.getSpace(sid) || {}).name,
     grade: ctx.userId ? (auth.profile(ctx.userId) || {}).grade : '',
     projectInstructions: proj ? proj.instructions : conv.instructions,
@@ -320,6 +329,9 @@ async function streamReply(req, res, ctx, sid, opt) {
   const placeholder = core.addMessage(sid, conv.id, {
     role: 'assistant', content: '', model: model, status: 'streaming',
     meta: {
+      // mode 落库：以前只进 prompt 不落库，管理员看板想统计"自学/引导/深研"
+      // 用了多少完全无从下手。写在这里，历史数据缺失的那段由看板如实标成 untracked。
+      mode: useMode,
       sources: docCtx.hits.map(h => ({ docId: h.docId, filename: h.filename, chunk: h.chunkIndex, score: h.score })),
       agentId: conv.agentId || '',
       skills: skills.enabledIds(sid),
@@ -699,6 +711,104 @@ async function handleApi(req, res, u) {
     // 档位只体现在学生侧的「能力」分区，不把这个数字摆出来，管理员改完档
     // 回到对话里看不出任何区别，会以为"改了没生效"。
     return sendJSON(res, 200, { ok: true, tiers: skills.TIERS, spaces: spaces, coverage: skills.tierCoverage() });
+  }
+
+  // ---------- 管理员：使用看板（2026-10-03 新增）----------
+  // 需求是"看 AI 自学被怎么用了、具体聊了什么"。
+  // 与上面几个管理接口一样，**必须放在下面的登录闸门之前** ——
+  // 管理员用自己的一套令牌，跟学习空间会话是两套体系，放到闸门后面会永远 401。
+  const requireAdmin = (res2) => {
+    if (!ADMIN_PASSWORD) { sendJSON(res2, 403, { error: 'ADMIN_DISABLED', message: '未设置管理密码' }); return false; }
+    if (!ADMIN_TOKENS.has(reqToken(req))) { sendJSON(res2, 401, { error: 'NO_AUTH' }); return false; }
+    return true;
+  };
+  const adminQuery = () => { try { return new URL(req.url, 'http://x').searchParams; } catch (e) { return new URLSearchParams(); } };
+
+  if (p === '/api/admin/overview' && method === 'GET') {
+    if (!requireAdmin(res)) return;
+    try { return sendJSON(res, 200, { ok: true, ...adminDash.overview({ days: adminQuery().get('days') }) }); }
+    catch (e) { return sendJSON(res, 500, { error: 'OVERVIEW_FAILED', message: e.message }); }
+  }
+  if (p === '/api/admin/usage/spaces' && method === 'GET') {
+    if (!requireAdmin(res)) return;
+    try { return sendJSON(res, 200, { ok: true, spaces: adminDash.spaceUsage({ days: adminQuery().get('days') }) }); }
+    catch (e) { return sendJSON(res, 500, { error: 'USAGE_FAILED', message: e.message }); }
+  }
+  const admSpaceUsageM = p.match(/^\/api\/admin\/spaces\/([^/]+)\/usage$/);
+  if (admSpaceUsageM && method === 'GET') {
+    if (!requireAdmin(res)) return;
+    try {
+      const d = adminDash.spaceDetail(decodeURIComponent(admSpaceUsageM[1]), { days: adminQuery().get('days') });
+      return sendJSON(res, 200, { ok: true, ...d });
+    } catch (e) {
+      return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 500, { error: e.code || 'USAGE_FAILED', message: e.message });
+    }
+  }
+  if (p === '/api/admin/conversations' && method === 'GET') {
+    if (!requireAdmin(res)) return;
+    try {
+      const q = adminQuery();
+      const d = adminDash.listConversations({
+        spaceId: q.get('spaceId') || '', q: q.get('q') || '',
+        limit: q.get('limit'), offset: q.get('offset'),
+      });
+      return sendJSON(res, 200, { ok: true, ...d });
+    } catch (e) { return sendJSON(res, 500, { error: 'LIST_FAILED', message: e.message }); }
+  }
+  // ★ export 必须在下面那条"按 id 取详情"之前匹配。
+  //   详情那条用的是 [^/]+ 锚定到结尾，本来也匹配不上 /export，
+  //   但显式放在前面能避免以后有人把详情改成贪婪匹配时踩坑。
+  const admExportM = p.match(/^\/api\/admin\/conversations\/([^/]+)\/export$/);
+  if (admExportM && method === 'GET') {
+    if (!requireAdmin(res)) return;
+    try {
+      const r = adminDash.exportConversation(decodeURIComponent(admExportM[1]));
+      const body = Buffer.from(r.markdown, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        // filename* 用 RFC 5987 编码 —— 文件名是中文，直接塞 filename= 会变乱码。
+        'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(r.filename),
+        'Content-Length': body.length,
+        'Cache-Control': 'no-store',
+      });
+      return res.end(body);
+    } catch (e) {
+      return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 500, { error: e.code || 'EXPORT_FAILED', message: e.message });
+    }
+  }
+  const admConvM = p.match(/^\/api\/admin\/conversations\/([^/]+)$/);
+  if (admConvM && method === 'GET') {
+    if (!requireAdmin(res)) return;
+    try {
+      const d = adminDash.conversationDetail(decodeURIComponent(admConvM[1]), {
+        includeDeleted: adminQuery().get('includeDeleted') === '1',
+      });
+      return sendJSON(res, 200, { ok: true, ...d });
+    } catch (e) {
+      return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 500, { error: e.code || 'DETAIL_FAILED', message: e.message });
+    }
+  }
+
+  // ---------- 管理员：模型切换（2026-10-03 新增）----------
+  // 「通用」/「深度思考」两个档位背后真实用哪个模型，改完立刻生效、不用重启。
+  // 值存 meta 表并优先于环境变量；传空串即回到部署时环境变量配的那个。
+  if (p === '/api/admin/models' && method === 'GET') {
+    if (!requireAdmin(res)) return;
+    try {
+      const cat = await llm.modelCatalog(adminQuery().get('refresh') === '1');
+      return sendJSON(res, 200, { ok: true, slots: llm.modelSlots(), catalog: cat });
+    } catch (e) { return sendJSON(res, 500, { error: 'MODELS_FAILED', message: e.message }); }
+  }
+  if (p === '/api/admin/models' && method === 'POST') {
+    if (!requireAdmin(res)) return;
+    const b = await readBody(req);
+    try {
+      const slot = llm.setModelSlot(b.slot, b.model);
+      return sendJSON(res, 200, { ok: true, slot: slot, slots: llm.modelSlots() });
+    } catch (e) {
+      const code = e.code || 'SET_FAILED';
+      return sendJSON(res, code === 'BAD_SLOT' || code === 'BAD_MODEL' ? 400 : 500, { error: code, message: e.message });
+    }
   }
 
   // ---------- 以下都需要登录 ----------

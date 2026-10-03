@@ -148,6 +148,13 @@
       <div class="land-meta">数据按「学习空间」隔离存储 · 一个家庭共用一个空间</div>
       <div class="land-meta">
         <button class="land-link" id="spAdmin" type="button">空间管理（管理员）</button>
+        <span class="land-sep">·</span>
+        <!-- ★ 全站唯一一处写死 /ai 前缀的地方。
+             看板是独立页面（不是 SPA 路由），而 nginx 的 sub_filter 只重写
+             /api/ 、/js/ 、/app.css 三个前缀，不会碰 /admin —— 所以写相对路径
+             「admin」在 URL 没有结尾斜杠时会解析成 /admin 而 404。
+             写绝对路径 /ai/admin 在线上一定对。本地直连 3100 调试时请手动访问 /admin。 -->
+        <a class="land-link" href="/ai/admin">使用看板</a>
       </div>
     </div>
 

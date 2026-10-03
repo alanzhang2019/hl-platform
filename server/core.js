@@ -181,7 +181,12 @@ function addMessage(spaceId, conversationId, { role, content, blocks, model, tok
   const c = D.get('SELECT * FROM conversations WHERE id = ? AND space_id = ?', conversationId, spaceId);
   if (!c) { const e = new Error('对话不存在'); e.code = 'NOT_FOUND'; throw e; }
   const r = D.get('SELECT COALESCE(MAX(seq),-1) m FROM messages WHERE conversation_id = ?', conversationId);
-  const seq = (Number(r && r.m) || -1) + 1;
+  // ★ 判空不能用真值判断，必须用 Number.isFinite：
+  //   原来写的是 (Number(r && r.m) || -1) + 1，而 MAX(seq)=0 时 Number(0) 是 0，
+  //   0 是 falsy —— `|| -1` 把它回退成 -1，于是第二条消息的 seq 又算成 0。
+  //   结果全表 seq 永远停在 0（线上实测 409 条消息 seq 全是 0，看板里每条都显示 #0）。
+  //   0 是一个完全合法的序号，不能被当成"没取到"。
+  const seq = (r && Number.isFinite(Number(r.m)) ? Number(r.m) : -1) + 1;
   const id = D.uid('m_');
   D.run(`INSERT INTO messages(id,conversation_id,seq,role,content,blocks_json,model,tokens_in,tokens_out,status,meta_json,attachments_json,client_id,created_at)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,

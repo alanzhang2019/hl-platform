@@ -4,6 +4,11 @@
 .env
 .env.local
 .env.*.local
+# ★ 改 .env 前的备份（.env.bak_20261003 这种）也带真实密钥。
+#   它结尾是时间戳而不是 .bak，上面那条 *.bak **匹配不到** ——
+#   少了这一行，git add -A 会把密钥直接提交进仓库。
+#   （只吃 .env.bak*，不会误伤 .env.example）
+.env.bak*
 
 # ---- 依赖（本项目目前零依赖，先挡住）----
 node_modules/

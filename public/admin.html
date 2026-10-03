@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-font="md">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>管理员看板 · 后浪学习平台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%232563EB'/><path d='M9 20c3-8 11-8 14 0' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round'/></svg>">
+<script>
+/* 与主站同一套主题键，从看板跳回主站不会闪色 */
+(function () {
+  try {
+    var t = localStorage.getItem('hl_theme'); if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+    var f = localStorage.getItem('hl_font'); if (f) document.documentElement.setAttribute('data-font', f);
+  } catch (e) {}
+})();
+</script>
+<link rel="stylesheet" href="/app.css">
+<style>
+.ad-wrap { max-width: 1180px; margin: 0 auto; padding: 22px 20px 60px; }
+.ad-head { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+.ad-head > div:first-child { flex: 1; min-width: 200px; }
+.ad-title { font-size: 1.24rem; font-weight: 700; letter-spacing: .2px; }
+.ad-sub { font-size: .82rem; margin-top: 3px; }
+.ad-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.ad-gate { max-width: 420px; margin: 60px auto; padding: 24px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+.ad-gate h2 { font-size: 1rem; margin-bottom: 6px; }
+.ad-gate p { font-size: .82rem; margin-bottom: 16px; }
+.ad-err { font-size: .8rem; color: var(--bad); min-height: 1.2em; margin-top: 8px; }
+
+.ad-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.ad-kpi { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 12px 14px; }
+.ad-kpi .k { font-size: .72rem; color: var(--dim); margin-bottom: 5px; }
+.ad-kpi .v { font-size: 1.42rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.ad-kpi .s { font-size: .7rem; color: var(--dim2); margin-top: 3px; }
+
+.ad-grid { display: grid; grid-template-columns: 1.55fr 1fr; gap: 12px; margin-bottom: 12px; }
+@media (max-width: 860px) { .ad-grid { grid-template-columns: 1fr; } }
+
+.ad-panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 15px 16px; margin-bottom: 12px; }
+.ad-panel > h3 { font-size: .88rem; font-weight: 600; margin-bottom: 3px; }
+.ad-panel > .hint { font-size: .74rem; color: var(--dim2); margin-bottom: 12px; }
+
+.ad-bars { display: flex; flex-direction: column; gap: 8px; }
+.ad-bar { display: flex; align-items: center; gap: 9px; font-size: .8rem; }
+.ad-bar .lb { width: 84px; color: var(--dim); flex: 0 0 auto; }
+.ad-bar .tr { flex: 1; height: 9px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+.ad-bar .fl { height: 100%; border-radius: 999px; background: var(--pri); }
+.ad-bar .vl { width: 54px; text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); flex: 0 0 auto; }
+
+.ad-tbl { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.ad-tbl th { text-align: left; font-weight: 500; color: var(--dim); font-size: .73rem; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.ad-tbl td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.ad-tbl tr:last-child td { border-bottom: 0; }
+.ad-tbl tbody tr.click { cursor: pointer; }
+.ad-tbl tbody tr.click:hover { background: var(--panel-2); }
+.ad-tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ad-tbl .t { font-weight: 500; }
+
+.ad-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 11px; }
+.ad-tools select, .ad-tools input {
+  font: inherit; font-size: .82rem; padding: .42em .6em; border-radius: var(--r-xs);
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--txt);
+}
+.ad-tools input { flex: 1; min-width: 150px; }
+
+.ad-pill { font-size: .68rem; padding: .12em .5em; border-radius: 999px; background: var(--panel-3); color: var(--dim); font-weight: 600; white-space: nowrap; }
+.ad-pill.pri { background: var(--pri-soft); color: var(--pri); }
+.ad-pill.bad { background: var(--bad-soft); color: var(--bad); }
+.ad-pill.ok { background: var(--ok-soft); color: var(--ok); }
+
+.ad-msgs { display: flex; flex-direction: column; gap: 10px; max-height: 640px; overflow-y: auto; padding-right: 4px; }
+.ad-msg { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 11px 13px; background: var(--panel-2); }
+.ad-msg.user { background: var(--pri-soft); border-color: transparent; }
+.ad-msg.del { opacity: .62; border-style: dashed; }
+.ad-msg-h { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: .74rem; color: var(--dim); flex-wrap: wrap; }
+.ad-msg-b { font-size: .86rem; line-height: 1.66; white-space: pre-wrap; word-break: break-word; }
+.ad-msg-b:empty::after { content: '（空）'; color: var(--dim2); }
+
+.ad-crumb { font-size: .8rem; color: var(--dim); margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ad-crumb a { color: var(--pri); cursor: pointer; }
+.ad-empty { font-size: .82rem; color: var(--dim2); padding: 18px 4px; text-align: center; }
+.ad-pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; font-size: .78rem; color: var(--dim); }
+</style>
+</head>
+<body>
+
+<div class="ad-wrap">
+
+  <header class="ad-head">
+    <div>
+      <div class="ad-title">管理员看板</div>
+      <div class="ad-sub dim">AI 自学使用情况 · 用户对话全文</div>
+    </div>
+    <div class="ad-acts">
+      <div class="seg" id="adRange">
+        <button type="button" data-d="7">7 天</button>
+        <button type="button" data-d="14" class="on">14 天</button>
+        <button type="button" data-d="30">30 天</button>
+        <button type="button" data-d="90">90 天</button>
+      </div>
+      <button class="btn sm" id="adReload" type="button">刷新</button>
+      <button class="btn sm ghost" id="adLogout" type="button" style="display:none">退出</button>
+    </div>
+  </header>
+
+  <div class="ad-gate" id="adGate">
+    <h2>需要管理密码</h2>
+    <p class="dim">看板能看到所有学习空间的对话内容，因此只对管理员开放。</p>
+    <div class="field" style="margin-bottom:10px">
+      <label>管理密码</label>
+      <input id="adPw" type="password" autocomplete="current-password" placeholder="ADMIN_PASSWORD">
+    </div>
+    <button class="btn primary" id="adLogin" type="button" style="width:100%">进入看板</button>
+    <div class="ad-err" id="adErr"></div>
+  </div>
+
+  <div id="adMain" style="display:none">
+
+    <section class="ad-kpis" id="adKpis"></section>
+
+    <section class="ad-panel">
+      <h3>模型切换</h3>
+      <div class="hint">改完下一次对话立即生效，不用重启。留空即恢复部署时环境变量配的模型。</div>
+      <div id="adModels"></div>
+    </section>
+
+    <div class="ad-grid">
+      <div class="ad-panel">
+        <h3>每日消息量</h3>
+        <div class="hint" id="adChartHint"></div>
+        <div id="adChart"></div>
+      </div>
+      <div class="ad-panel">
+        <h3>对话模式分布</h3>
+        <div class="hint">AI 回答所用的档位（自学 / 引导 / 深研）</div>
+        <div id="adModes"></div>
+      </div>
+    </div>
+
+    <div class="ad-grid">
+      <div class="ad-panel">
+        <h3>使用最多的空间</h3>
+        <div class="hint">按窗口内消息数排序</div>
+        <div id="adTopSpaces"></div>
+      </div>
+      <div class="ad-panel">
+        <h3>学习动作分布</h3>
+        <div class="hint">对话 / 复习 / 传资料 / 测评等</div>
+        <div id="adKinds"></div>
+      </div>
+    </div>
+
+    <section class="ad-panel">
+      <h3>学习空间</h3>
+      <div class="hint">点任意一行进入该空间的明细</div>
+      <div id="adSpaces"></div>
+    </section>
+
+    <section class="ad-panel" id="adSpaceDetail" style="display:none"></section>
+
+    <section class="ad-panel">
+      <h3>对话浏览</h3>
+      <div class="hint">按空间筛选或按关键词搜索，点开可看逐条对话全文</div>
+      <div class="ad-tools">
+        <select id="adConvSpace"><option value="">全部空间</option></select>
+        <input id="adConvQ" placeholder="搜索标题或对话内容…">
+        <button class="btn sm" id="adConvSearch" type="button">搜索</button>
+      </div>
+      <div id="adConvList"></div>
+      <div class="ad-pager" id="adConvPager"></div>
+    </section>
+
+    <section class="ad-panel" id="adConvDetail" style="display:none"></section>
+
+  </div>
+</div>
+
+<script src="/js/admin.js"></script>
+</body>
+</html>
