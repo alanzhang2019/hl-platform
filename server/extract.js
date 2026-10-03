@@ -147,24 +147,160 @@ function unescapePdfString(s) {
   return out;
 }
 
-/** 从一段已解码的内容流里抽文字 */
-function textFromContentStream(s) {
+// ================= ToUnicode CMap（子集字体能不能读出来的关键） =================
+// 为什么必须有：中文 PDF 普遍用**内嵌子集字体**（Identity-H 编码）。
+// 内容流里 `<000100020003>` 写的是 **CID**（字形在子集里的序号），
+// 不是 Unicode —— 直接 `String.fromCharCode(cid)` 得到的是乱码，
+// 于是 looksLikeText 判不过，整份 PDF 被当成"读不出来"。
+// 正确做法是读字体字典里的 `/ToUnicode` CMap，把 CID 映回真正的字符。
+// 认不出（没有 ToUnicode）就如实返回空映射，让上层照旧报"读不出来"，不许硬猜。
+
+/** 解一段 CMap 流的字节（可能是 FlateDecode 压缩的）。
+ *  ★ PDF 的 FlateDecode 是 **zlib 格式**（头 0x78 …），不是 gzip（0x1f 0x8b）；
+ *    两者混了会让 CMap 解不出来 → 映射表为空 → 白干（本函数第一版就踩了）。
+ *    这里干脆**直接试着解压**：`tryInflate` 解不开会返回 null，再按原文处理，
+ *    比"猜魔术字节"更稳（有些流前面还有别的字节）。 */
+function cmapBytes(buf) {
+  const inf = tryInflate(buf);
+  const d = inf || buf;
+  return d.toString('latin1');
+}
+
+/**
+ * 解析 ToUnicode CMap 的 `beginbfchar` / `beginbfrange` 段。
+ * @returns {Map<number,string>} CID → 字符串（一个 CID 可能映到多个字符，如连字）
+ */
+function parseToUnicode(text) {
+  const map = new Map();
+  const src = cmapBytes(Buffer.from(text, 'latin1'));
+  const hex2 = h => parseInt(h, 16);
+  // 一个 <dst> 里的 UTF-16BE 字节 → 字符串
+  const dstOf = h => {
+    let s = '';
+    const clean = h.replace(/\s+/g, '');
+    for (let i = 0; i + 3 < clean.length; i += 4) {
+      const u = parseInt(clean.substr(i, 4), 16);
+      if (u) s += String.fromCharCode(u);
+    }
+    return s;
+  };
+  // beginbfchar: <src> <dst>
+  let m;
+  const bfcharRe = /beginbfchar([\s\S]*?)endbfchar/g;
+  while ((m = bfcharRe.exec(src)) !== null) {
+    const body = m[1];
+    const pairRe = /<([0-9A-Fa-f\s]+)>\s*<([0-9A-Fa-f\s]+)>/g;
+    let p;
+    while ((p = pairRe.exec(body)) !== null) map.set(hex2(p[1].replace(/\s+/g, '')), dstOf(p[2]));
+  }
+  // beginbfrange: <lo> <hi> <dstStart>  或  <lo> <hi> [<d1> <d2> ...]
+  const bfrangeRe = /beginbfrange([\s\S]*?)endbfrange/g;
+  while ((m = bfrangeRe.exec(src)) !== null) {
+    const body = m[1];
+    const rre = /<([0-9A-Fa-f\s]+)>\s*<([0-9A-Fa-f\s]+)>\s*(<[0-9A-Fa-f\s]+>|\[[\s\S]*?\])/g;
+    let r;
+    while ((r = rre.exec(body)) !== null) {
+      const lo = hex2(r[1].replace(/\s+/g, ''));
+      const hi = hex2(r[2].replace(/\s+/g, ''));
+      const tgt = r[3];
+      if (tgt[0] === '[') {
+        const items = tgt.match(/<[0-9A-Fa-f\s]+>/g) || [];
+        for (let i = 0; i < items.length && lo + i <= hi; i++) map.set(lo + i, dstOf(items[i].slice(1, -1)));
+      } else {
+        const startHex = tgt.slice(1, -1).replace(/\s+/g, '');
+        const start = parseInt(startHex, 16);
+        const wide = startHex.length > 4;   // 目标是多字节 UTF-16
+        for (let c = lo; c <= hi && c - lo < 65536; c++) {
+          const u = start + (c - lo);
+          map.set(c, wide ? dstOf(u.toString(16).padStart(startHex.length, '0')) : String.fromCharCode(u));
+        }
+      }
+    }
+  }
+  return map;
+}
+
+/**
+ * 扫出文档里所有字体的 ToUnicode 映射，**合并成一张表**。
+ *
+ * 合并而不是"按资源名分表"：本项目只做「把文字读出来」这一件事，
+ * 不做逐字形排版还原；同文档里不同子集字体的 CID 空间各自独立，
+ * 但实践中互相冲突的概率极低，而分表的复杂度（要跟着 Tf 切字体）明显更高。
+ * 冲突时**后者不覆盖前者** —— 先到的留着，避免把已经映对的覆盖成错的。
+ */
+function toUnicodeMaps(buf) {
+  const raw = buf.toString('latin1');
+  const objs = scanObjects(buf);
+  const merged = new Map();
+  let found = 0;
+  objs.forEach(o => {
+    if (!/\/Type\s*\/Font/.test(o.dict)) return;
+    const ref = dictRefNum(o.dict, 'ToUnicode');
+    if (ref == null) return;
+    const co = objs.get(ref);
+    if (!co || co.dataStart < 0) return;
+    let d = buf.slice(co.dataStart, co.dataEnd);
+    const cm = parseToUnicode(d.toString('latin1'));
+    if (cm.size) {
+      found++;
+      cm.forEach((v, k) => { if (!merged.has(k)) merged.set(k, v); });
+    }
+  });
+  return { map: merged, fonts: found };
+}
+
+/** 把一段十六进制字符串（`<...>` 里的内容，已去掉尖括号与空白）解成文字。
+ *  @param {Map<number,string>|null} cidMap CID→字符（来自 ToUnicode） */
+function decodeHexText(hex, cidMap) {
+  if (!hex || !/^[0-9A-Fa-f]+$/.test(hex)) return '';
+  let t = '';
+  // ★ 有 ToUnicode 就用它查（子集字体的正道）；查不到的 CID 跳过而不是猜。
+  if (cidMap && cidMap.size) {
+    const w = hex.length % 4 === 0 ? 4 : 2;   // 2 字节一 CID 是最常见写法
+    for (let i = 0; i + w <= hex.length; i += w) {
+      const cid = parseInt(hex.substr(i, w), 16);
+      const hit = cidMap.get(cid);
+      if (hit != null) t += hit;
+    }
+  } else if (hex.length % 4 === 0) {
+    // 没有 ToUnicode：2 字节一字符（常见于 CID 字体），尽力而为
+    for (let i = 0; i < hex.length; i += 4) t += String.fromCharCode(parseInt(hex.substr(i, 4), 16));
+  } else {
+    for (let i = 0; i + 1 < hex.length; i += 2) t += String.fromCharCode(parseInt(hex.substr(i, 2), 16));
+  }
+  return t;
+}
+
+/** 从一段已解码的内容流里抽文字。
+ *  @param {Map<number,string>|null} cidMap CID→字符（来自 ToUnicode）；没有就尽力而为 */
+function textFromContentStream(s, cidMap) {
   let out = '';
   const re = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>|\bT[dD]\b|\bT\*\b|\bTJ\b|\bTj\b|\bET\b/g;
   let m, pending = '';
   while ((m = re.exec(s)) !== null) {
     const tok = m[0];
-    if (tok[0] === '(') pending += unescapePdfString(tok.slice(1, -1));
-    else if (tok[0] === '<') {
-      const hex = tok.slice(1, -1).replace(/\s+/g, '');
-      let t = '';
-      if (hex.length % 4 === 0 && /^[0-9A-Fa-f]+$/.test(hex)) {
-        // 2 字节一字符（常见于 CID 字体），尽力而为
-        for (let i = 0; i < hex.length; i += 4) t += String.fromCharCode(parseInt(hex.substr(i, 4), 16));
+    if (tok[0] === '(') {
+      const inner = tok.slice(1, -1);
+      const un = unescapePdfString(inner);
+      // ★★ `[(<0001>) -50 (<0002>)] TJ` 是**极常见**的写法（TJ 数组带每字间距），
+      //    里面的 `(<hex>)` 与 `<hex>` 是同一个意思 —— 但走 `(` 分支的话
+      //    只会得到字面的 "<0001>" 字符串，**永远不会去查 CID 表**，
+      //    于是中文 PDF 抽出来的是满屏 `<0002><0005>` 这种原始码（实测踩到）。
+      //    判据：整个串就是一段**尖括号包着的**十六进制（`(<...>)` 的写法，
+      //    括号不会被 unescape 吃掉）—— 才当十六进制解；
+      //    否则老老实实当普通文本（真文字里出现 `<` 也是可能的，别误伤）。
+      //    注意「有没有 cidMap」都要走这条路：带了映射就查表，没带就按
+      //    裸 <hex> 的老行为尽力而为 —— 两条路必须**行为一致**，
+      //    否则没映射时 TJ 数组会吐出字面的 "<00010002>"，
+      //    而那是**纯 ASCII**，looksLikeText 会放行 ⇒ 原始码冒充正文（实测踩到）。
+      const m2 = /^<([0-9A-Fa-f\s]+)>$/.exec(un);
+      if (m2) {
+        pending += decodeHexText(m2[1].replace(/\s+/g, ''), cidMap);
       } else {
-        for (let i = 0; i + 1 < hex.length; i += 2) t += String.fromCharCode(parseInt(hex.substr(i, 2), 16));
+        pending += un;
       }
-      pending += t;
+    } else if (tok[0] === '<') {
+      pending += decodeHexText(tok.slice(1, -1).replace(/\s+/g, ''), cidMap);
     } else if (tok === 'Td' || tok === 'TD' || tok === 'T*') {
       if (pending) { out += pending + '\n'; pending = ''; }
     } else if (tok === 'TJ' || tok === 'Tj') {
@@ -320,6 +456,10 @@ const SCANNED_NOTE = '这是一份**扫描件**（整页都是图片，没有文
 
 function extractPdf(buf) {
   const raw = buf.toString('latin1');
+  // ★ 先收齐字体里的 ToUnicode 映射 —— 中文 PDF 普遍是内嵌子集字体，
+  //   没有这张表，内容流里的 CID 全是乱码（见 toUnicodeMaps 的注释）。
+  const tu = toUnicodeMaps(buf);
+  const cidMap = tu.map.size ? tu.map : null;
   const chunks = [];
   const re = /stream\r?\n?/g;
   let m;
@@ -338,7 +478,7 @@ function extractPdf(buf) {
       if (!inf) continue;
       data = inf;
     }
-    const txt = textFromContentStream(data.toString('latin1'));
+    const txt = textFromContentStream(data.toString('latin1'), cidMap);
     if (txt.trim()) chunks.push(txt);
   }
   let text = chunks.join('\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
@@ -347,17 +487,34 @@ function extractPdf(buf) {
   const info = pdfInfo(buf);
   const pages = info.pages || (raw.match(/\/Type\s*\/Page[^s]/g) || []).length || (chunks.length || 0);
   if (!text || !looksLikeText(text)) {
-    // 零字体 + 有整页图 = 扫描件。这不是"解析失败"，是"这条路本来就走不通"，
-    // 得换 OCR，所以要把它**和真失败区分开**（上层据此决定排队识别还是报错）。
-    if (info.fonts === 0 && info.images > 0) {
-      return { text: '', pages: pages, scanned: true, fonts: 0, images: info.images, note: SCANNED_NOTE };
+    // ★ 抽不出文字时，先问一句「**有没有页图**」，因为那决定了这条路还能不能救：
+    //   有图 → 可以像扫描件一样逐页 OCR（换个引擎去认，用户不用重新准备文件）；
+    //   没图 → 真的是死路（既没文字层也没图），只能如实说明并建议换文件。
+    //
+    //   三种"读不出"要分清，但它们**都**归到 scanned（= 排队 OCR 的信号）：
+    //     ① 零字体 + 有图      —— 经典扫描件
+    //     ② 有字体 + 无 ToUnicode + 有图 —— CID 子集且没带映射表（中文 PDF 常见）
+    //     ③ 有字体 + 有 ToUnicode，仍抽不出 + 有图 —— 映射表不全（映射表可能是残缺的）
+    //   而「有字体、有 ToUnicode、却还是没有图」这种，映射已经在用了还读不出，
+    //   说明不是映射问题，如实报"抽不出"比假装成扫描件更诚实。
+    if (info.images > 0) {
+      const why = info.fonts === 0
+        ? SCANNED_NOTE
+        : (cidMap
+          ? '这份 PDF 有文字层，但字形映射不完整，没能可靠地抽出文字。正在用 AI 逐页识别，识别完就能在上面提问、也能被 AI 引用。'
+          : '这份 PDF 用了内嵌子集字体且没带 Unicode 映射表，没能抽出文字。正在用 AI 逐页识别，识别完就能在上面提问、也能被 AI 引用。');
+      return { text: '', pages: pages, scanned: true, fonts: info.fonts, images: info.images, note: why };
     }
     return {
       text: '', pages: pages, scanned: false, fonts: info.fonts, images: info.images,
-      note: '这份 PDF 的文字用了内嵌子集字体，没能抽出可用的文字。建议：换成可复制文字的 PDF，或直接把关键段落贴进对话。',
+      note: (info.fonts > 0
+        ? '这份 PDF 的文字用了内嵌子集字体且没带 Unicode 映射表，'
+        : '这份 PDF 里没有找到可用的文字层，')
+        + '而它也没有可识别的整页图片，所以两条路都走不通。'
+        + '建议：换成可复制文字的 PDF，或直接把关键段落贴进对话。',
     };
   }
-  return { text: text, pages: pages, scanned: false, fonts: info.fonts, images: info.images };
+  return { text: text, pages: pages, scanned: false, fonts: info.fonts, images: info.images, cidMapped: !!cidMap };
 }
 
 // ================= 统一入口 =================
@@ -485,6 +642,8 @@ function extract(buf, filename) {
 module.exports = {
   extract, extOf, sniffType, unzip, looksLikeText, extractPdf, extractDocx, extractXlsx,
   textFromContentStream, unescapePdfString,
+  // 子集字体（ToUnicode）
+  parseToUnicode, toUnicodeMaps, dictRefNum,
   // 扫描件链路
   scanObjects, pdfInfo, pdfPageImages, SCANNED_NOTE,
 };
