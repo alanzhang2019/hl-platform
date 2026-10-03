@@ -1,5 +1,5 @@
 'use strict';
-/* 反证：把批次26 修复的三处关键点分别拔掉，套件必须变红。
+/* 反证：把批次26/27 修复的六处关键点分别拔掉，套件必须变红。
    ★ 本机 execFileSync / spawnSync 一律 EBUSY ⇒ **必须同进程跑**（项目既有判据）。
    套件末尾有 process.exit ⇒ 在这里把它换成抛异常来接管控制权。 */
 const fs = require('fs');
@@ -51,12 +51,27 @@ const CASES = [
     s => s.replace(/const tu = toUnicodeMaps\(buf\);\s*\n\s*const cidMap = tu\.map\.size \? tu\.map : null;/,
       'const cidMap = null;'),
     true],
-  ['拔掉③：调用点不传 cidMap（专治"只在定义处有参数"的假绿）',
-    s => s.replace(/textFromContentStream\(([^,)]+), cidMap\)/g, 'textFromContentStream($1)'),
+  ['拔掉③：调用点不传"按字体分好的表"（只剩全局合并表 ⇒ 多字体必然串味）',
+    // ★ 两个调用点的第三参分别是 `fmaps` 与 `null`（兜底路径）。函数**定义**处
+    //   的参数名是 `fontMaps`（大写 M），与这里的小写 `fmaps` 不同 ——
+    //   所以这条替换只会命中调用点，不会把定义也改掉。
+    s => s.replace(/, cidMap, fmaps\)/g, ', cidMap)')
+          .replace(/, cidMap, null\)/g, ', cidMap)'),
     true],
   ['拔掉④：TJ 数组里的 (<hex>) 不再查映射表（退回"吐原始码"）',
-    s => s.replace(/if \(m2\) \{\s*\n\s*pending \+= decodeHexText\(m2\[1\]\.replace\(\/\\s\+\/g, ''\), cidMap\);\s*\n\s*\} else \{\s*\n\s*pending \+= un;\s*\n\s*\}/,
+    s => s.replace(/if \(m2\) \{\s*\n\s*pending \+= decodeHexText\(m2\[1\]\.replace\(\/\\s\+\/g, ''\), cur\);\s*\n\s*\} else \{\s*\n\s*pending \+= un;\s*\n\s*\}/,
       'pending += un;'),
+    true],
+  ['拔掉⑤：不走"按 /Contents 取页面内容流"这条路（退回"所有 stream 都当正文试"）',
+    // ★ 只改 `let refs = …` 那行是**不够**的 —— 紧跟着的
+    //   `if (!refs.length) { … dictRefNum … }` 会把它又填回来，变异等于没生效。
+    //   所以直接把整个"页面路径"跳过，让流程落到兜底扫全流那一支。
+    s => s.replace(/const fmaps = fontMapsForPage\(raw, pg\.dict, objs, buf\);/,
+      'continue;'),
+    true],
+  ['拔掉⑥：`Tf` 不切换字体表（cur 恒为全局表）',
+    s => s.replace(/cur = \(fontMaps && fontMaps\.get\(m\[1\]\)\) \|\| cidMap;/,
+      'cur = cidMap;'),
     true],
 ];
 
@@ -79,5 +94,5 @@ for (const [name, mutate, wantRed] of CASES) {
 }
 fs.writeFileSync(target, good, 'utf8');
 console.log(bad ? '\n❌ 反证有 ' + bad + ' 项不符：套件对这些改动不敏感！'
-                : '\n✅ 反证全部符合预期：四处修复每拔掉一处，套件都变红。');
+                : '\n✅ 反证全部符合预期：六处修复每拔掉一处，套件都变红。');
 process.exit(bad ? 1 : 0);
