@@ -158,7 +158,12 @@ function setTtsSlot(patch) {
     toSave.baseUrl = v;
   }
   if (patch.enabled !== undefined) {
-    toSave.enabled = (patch.enabled === true || patch.enabled === 'true' || patch.enabled === '1') ? '1' : '0';
+    const v = patch.enabled === null || patch.enabled === undefined ? '' : String(patch.enabled).trim();
+    if (v === '') {
+      toSave.enabled = ''; // 空串 = 清除覆盖，让环境变量生效
+    } else {
+      toSave.enabled = (v === '1' || v === 'true') ? '1' : '0';
+    }
   }
   Object.keys(toSave).forEach(function (k) { D.metaSet(TTS_META_KEY[k], toSave[k]); });
   return ttsSlot();
