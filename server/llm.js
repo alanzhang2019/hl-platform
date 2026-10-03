@@ -215,6 +215,14 @@ const ARTIFACT_RULES = `【关于"画图"】
 - 拿不准画成什么样、或者图画出来也不比文字更清楚时，**宁可不画**。
   一张不知所云的图比没有图更糟：学生会以为自己没看懂，而不是以为图不对。`;
 
+const VISUALIZE_RULES = `【图表优先模式】
+当前对话开启了「图表优先」模式。你的回复**必须优先使用可视化图表**，而不是大段文字：
+1. 只要学生的提问涉及概念关系、流程步骤、分类对比、数据变化、几何图形、空间位置、表格数据，**先画图再讲解**——不要先写一大段文字描述再补一张图。
+2. 图和文字的关系：图负责「一眼看清结构和关系」，文字负责「解释图里每个部分是什么意思、为什么是这样」。
+3. 用 \`\`\`svg-json 代码块输出图表，支持的 kind 与字段同上面的画图协议。
+4. 如果某个问题确实不适合画图（比如纯情感交流、开放式观点讨论），可以只用文字，但要在开头说明「这个问题用文字表达更合适」。
+5. 不要为同一个概念反复画多张图——一张清晰的图 + 到位的讲解，胜过三张重复的图。`;
+
 /**
  * 兜底注入的预算：总字数 / 单份字数。
  * 只在"按问题检索一条都没命中"时才用，所以给得比较松也不怕费 token。
@@ -252,7 +260,7 @@ function buildTempDocContext(tempDocs, budget) {
   return blocks.join('\n\n');
 }
 
-function buildSystemPrompt({ mode, spaceName, grade, projectInstructions, docNames, memories, skillPrompts, docContext, tempDocs }) {
+function buildSystemPrompt({ mode, spaceName, grade, projectInstructions, docNames, memories, skillPrompts, docContext, tempDocs, visualize }) {
   const parts = [SOCRATIC_CORE];
   if (MODE_PROMPTS[mode]) parts.push(MODE_PROMPTS[mode]);
   // 数学式的写法约束。放在画图协议之前 —— 它管的是"怎么把式子写出来"，比画图更基础。
@@ -260,6 +268,8 @@ function buildSystemPrompt({ mode, spaceName, grade, projectInstructions, docNam
   parts.push(MATH_FORMAT_RULES);
   // 技能提示词放在方法说明之后、画图协议之前 —— 它是对"怎么讲"的约束，优先级高于画图
   if (skillPrompts && skillPrompts.length) parts.push(skillPrompts.join('\n\n'));
+  // 图表优先模式：用户明确要求 AI 优先用图表回复
+  if (visualize) parts.push(VISUALIZE_RULES);
   parts.push(ARTIFACT_RULES);
   const tdocs = (Array.isArray(tempDocs) ? tempDocs : []).filter(d => d && d.filename);
   const ctx = [];

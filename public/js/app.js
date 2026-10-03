@@ -54,6 +54,7 @@
     pending: [],           // 待发送附件（图片）
     tts: { rate: 1, maxChars: 5000 },
     speaking: '',          // 正在朗读的消息 id
+    visualize: false,      // 图表模式：AI 优先用图表回复
     favOnly: false,        // 侧栏只看收藏
     convQ: '',             // 侧栏搜索词
     jobs: {},              // 配图任务：messageId -> job
@@ -1513,6 +1514,43 @@
     }
   }
 
+  // ---------- 选中文字朗读 ----------
+  let _selTtsBtn = null;
+  function hideSelTts() {
+    if (_selTtsBtn) { _selTtsBtn.remove(); _selTtsBtn = null; }
+  }
+  function showSelTts(text, x, y) {
+    hideSelTts();
+    const b = document.createElement('button');
+    b.className = 'btn sm pri sel-tts-btn';
+    b.textContent = '朗读选中';
+    b.style.cssText = 'position:fixed;z-index:40;left:' + x + 'px;top:' + y + 'px;box-shadow:0 4px 12px rgba(0,0,0,.15);pointer-events:auto;';
+    b.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      speakText(null, text, null);
+      hideSelTts();
+    });
+    document.body.appendChild(b);
+    _selTtsBtn = b;
+  }
+  // 在消息列表上监听选中文本
+  document.addEventListener('mouseup', function (ev) {
+    const sel = window.getSelection();
+    const txt = sel ? String(sel.toString() || '').trim() : '';
+    if (!txt || txt.length < 2) { hideSelTts(); return; }
+    // 只有选区落在消息正文里才显示朗读按钮
+    const anchor = sel.anchorNode;
+    if (!anchor) { hideSelTts(); return; }
+    const inMsg = anchor.parentElement && anchor.parentElement.closest('.msg .md');
+    if (!inMsg) { hideSelTts(); return; }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    showSelTts(txt, rect.left + rect.width / 2 - 36, rect.top - 38);
+  });
+  // 点空白处收起朗读按钮
+  document.addEventListener('mousedown', function (ev) {
+    if (_selTtsBtn && !_selTtsBtn.contains(ev.target)) hideSelTts();
+  });
+
   // ---------- 发送（SSE 流式 + 断流恢复）----------
   let streamPaint = 0;
   let abortCtl = null;
@@ -1563,7 +1601,7 @@
         signal: abortCtl.signal,
         body: JSON.stringify({
           text: text, conversationId: S.convId || undefined, mode: S.mode, model: S.model,
-          agentId: S.agentId || undefined, webSearch: S.webSearch,
+          agentId: S.agentId || undefined, webSearch: S.webSearch, visualize: S.visualize || undefined,
           // 新对话时把「待归入的项目」一起带上：会话是服务端在收到首条消息时才创建的，
           // 漏了这个字段就会 project_id=NULL 掉进「未归入项目」。
           // 已有对话（S.convId 存在）不用传，归属由「移动到项目」单独管。
@@ -1758,7 +1796,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + S.token },
         signal: abortCtl.signal,
-        body: JSON.stringify({ model: S.model, mode: S.mode }),
+        body: JSON.stringify({ model: S.model, mode: S.mode, visualize: S.visualize || undefined }),
       });
       if (!res.ok) throw new Error('服务返回 ' + res.status);
       const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ''; let rid = '';
@@ -5861,6 +5899,8 @@
       if (fl && fl.length) { pickAttach(fl); toast('正在读取拖入的文件…'); }
     });
     $('#modeSel').addEventListener('change', e => { S.mode = e.target.value; toast('已切到「' + e.target.selectedOptions[0].text + '」'); });
+    const vizChk = $('#vizChk');
+    if (vizChk) { vizChk.addEventListener('change', e => { S.visualize = e.target.checked; toast(S.visualize ? '图表模式已开启：AI 优先用图表回复' : '图表模式已关闭'); }); }
     $('#modelSel').addEventListener('change', e => {
       S.model = e.target.value;
       const m = (S.models || []).filter(x => x.id === S.model)[0];

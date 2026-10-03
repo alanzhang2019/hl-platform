@@ -69,7 +69,7 @@ const adminDash = require('./server/admin');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-03-admin-dash5';
+const APP_VERSION = '2026-10-03-admin-dash6';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -275,6 +275,7 @@ async function streamReply(req, res, ctx, sid, opt) {
     skillPrompts: skillPrompts,
     docContext: docCtx.text,
     tempDocs: tempDocs,
+    visualize: !!opt.visualize,
   });
   // 学生随消息发来的图片：**真的看一眼**，再把内容以文字形式交给模型。
   // ★ 2026-10-02 改：以前这里只写"你看不到图片内容本身" —— 一个"拍错题来问"
@@ -1021,6 +1022,7 @@ async function handleApi(req, res, u) {
       conv: conv, text: text, model: b.model || conv.model,
       mode: b.mode, skillIds: b.skillIds, attachments: atts,
       clientId: b.clientId, webSearch: b.webSearch !== undefined ? !!b.webSearch : !!conv.webSearch,
+      visualize: b.visualize,
       body: b,
     });
   }
@@ -1077,7 +1079,7 @@ async function handleApi(req, res, u) {
       return streamReply(req, res, ctx, sid, {
         conv: conv, text: (lastUser && lastUser.content) || '', model: b.model || conv.model,
         mode: b.mode, skillIds: b.skillIds, skipUserMessage: true,
-        webSearch: !!conv.webSearch, body: b,
+        webSearch: !!conv.webSearch, visualize: b.visualize, body: b,
       });
     }
   }

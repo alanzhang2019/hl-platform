@@ -321,6 +321,8 @@ button { cursor: pointer; }
  * 桌面端 display:contents —— 子元素直接参与 .topbar 的 flex 布局，排版与拆分前逐像素一致；
  * 窄屏下整组切成一条独立行，见下面的 @media。 */
 .tb-tools { display: contents; }
+.tb-chk { font-size: .78rem; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.tb-chk input { cursor: pointer; }
 #kbSearch { max-width: 200px; }
 
 /* ================= 对话流 =================
@@ -396,10 +398,14 @@ button { cursor: pointer; }
 }
 .msg .meta .who { font-weight: 600; color: var(--dim); }
 .msg.user .meta { display: none; }
-/* 操作条：常显但弱化，悬停变实。竞品是常驻的，但不该抢正文的注意力。 */
-.msg .acts { display: flex; gap: 5px; margin-top: 10px; opacity: .5; transition: opacity .18s; flex-wrap: wrap; }
-.msg:hover .acts, .msg .acts:hover { opacity: 1; }
+/* 操作条：始终可见（用户反馈找不到删除按钮）。hover 时按钮本身变实。 */
+.msg .acts { display: flex; gap: 5px; margin-top: 10px; opacity: 1; flex-wrap: wrap; }
+.msg .acts .btn { opacity: .65; transition: opacity .18s; }
+.msg:hover .acts .btn, .msg .acts:hover .btn { opacity: 1; }
 .msg .acts .btn { font-size: .72rem; padding: .2em .58em; border-radius: 8px; }
+/* 选中文字朗读浮动按钮 */
+.sel-tts-btn { animation: popIn .18s ease-out; }
+@keyframes popIn { from { transform: scale(.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
 .caret { display: inline-block; width: 2px; height: 1.05em; background: var(--pri); vertical-align: text-bottom; animation: blink 1s step-end infinite; margin-left: 1px; }
 @keyframes blink { 50% { opacity: 0; } }
