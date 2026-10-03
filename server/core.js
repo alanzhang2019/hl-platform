@@ -166,7 +166,9 @@ function listMessages(spaceId, conversationId, opts) {
   const o = opts || {};
   const c = D.get('SELECT 1 FROM conversations WHERE id = ? AND space_id = ?', conversationId, spaceId);
   if (!c) return null;
-  const sql = 'SELECT * FROM messages WHERE conversation_id = ?' + (o.includeDeleted ? '' : ' AND deleted = 0') + ' ORDER BY seq ASC';
+  // ★ 同样要 rowid 兜底：存量数据 seq 全是 0，纯按 seq 排时它们彼此并列，
+  //   顺序不由 SQL 保证。主站的对话就是靠这个接口回放的，顺序错了整个对话就乱。
+  const sql = 'SELECT * FROM messages WHERE conversation_id = ?' + (o.includeDeleted ? '' : ' AND deleted = 0') + ' ORDER BY seq ASC, rowid ASC';
   return D.all(sql, conversationId).map(shapeMessage);
 }
 

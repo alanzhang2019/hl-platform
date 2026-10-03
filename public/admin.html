@@ -77,6 +77,20 @@
 .ad-msg-b { font-size: .86rem; line-height: 1.66; white-space: pre-wrap; word-break: break-word; }
 .ad-msg-b:empty::after { content: '（空）'; color: var(--dim2); }
 
+/* 思考过程：块永远在（默认折叠），没有内容的如实标注，而不是让整块消失 */
+.ad-rsn { margin-top: 7px; }
+.ad-rsn > summary { cursor: pointer; font-size: .76rem; color: var(--dim); user-select: none; }
+.ad-rsn > summary:hover { color: var(--txt); }
+.ad-rsn[open] > summary { color: var(--txt); }
+.ad-rsn-bd {
+  margin: 6px 0 2px; padding: 9px 11px;
+  border-left: 2px solid var(--line-2); border-radius: 0 7px 7px 0;
+  background: var(--panel-2); color: var(--dim);
+  font-size: .78rem; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+  max-height: 20rem; overflow-y: auto;
+}
+.ad-rsn-none { margin-top: 7px; font-size: .74rem; color: var(--dim2); }
+
 .ad-crumb { font-size: .8rem; color: var(--dim); margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ad-crumb a { color: var(--pri); cursor: pointer; }
 .ad-empty { font-size: .82rem; color: var(--dim2); padding: 18px 4px; text-align: center; }

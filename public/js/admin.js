@@ -21,6 +21,7 @@
     days: 14,
     spaces: [],
     models: [],
+    allReason: false,   // 「展开全部思考过程」的开关，跨重渲染保持
     convLimit: 25,
     convOffset: 0,
     convTotal: 0,
@@ -404,6 +405,22 @@
     if (next) next.addEventListener('click', function () { S.convOffset += S.convLimit; loadConvs(); });
   }
 
+  /**
+   * 思考过程块：**始终存在**，默认折叠。
+   *
+   * ★ 以前是"有内容才渲染" —— 结果大多数 AI 回复上整块不见了
+   *   （线上 409 条消息里只有 101 条带思考过程）。管理员看到 AI 的回答下
+   *   面光秃秃的，只会有一个结论：看板把数据弄丢了。
+   *   正确做法是块一直在（折叠着），没内容的如实写"本条没有输出"，
+   *   把"模型没给"和"看板丢了"这两件事区分开 —— 后者才是事故。
+   */
+  function rsnHTML(raw) {
+    var r = String(raw || '').trim();
+    if (!r) return '<div class="ad-rsn-none">思考过程 · 本条没有输出</div>';
+    return '<details class="ad-rsn"><summary>思考过程 · ' + num(r.length) + ' 字</summary>' +
+      '<div class="ad-rsn-bd">' + esc(r) + '</div></details>';
+  }
+
   // ---------- 渲染：对话全文 ----------
   function renderConvDetail(d) {
     var c = d.conversation;
@@ -414,10 +431,7 @@
       var atts = (m.attachments && m.attachments.length)
         ? '<div class="dim" style="font-size:.74rem;margin-top:6px">附件：' + esc(m.attachments.map(function (a) { return a.name || a.id; }).join('、')) + '</div>'
         : '';
-      var reason = m.reasoning
-        ? '<details style="margin-top:7px"><summary class="dim" style="font-size:.74rem;cursor:pointer">思考过程</summary>' +
-          '<div class="dim" style="font-size:.78rem;white-space:pre-wrap;margin-top:5px">' + esc(m.reasoning) + '</div></details>'
-        : '';
+      var reason = m.role === 'assistant' ? rsnHTML(m.reasoning) : '';
       var mode = m.meta && m.meta.mode ? '<span class="ad-pill">' + esc(MODE_LABEL[m.meta.mode] || m.meta.mode) + '</span>' : '';
       return '<div class="' + cls + '"><div class="ad-msg-h">' +
         '<span class="ad-pill' + (m.role === 'user' ? ' pri' : '') + '">' + esc(ROLE_LABEL[m.role] || m.role) + '</span>' +
@@ -437,6 +451,9 @@
       '<div class="ad-tools">' +
       '<label class="dim" style="font-size:.78rem"><input type="checkbox" id="adShowDel"' +
       (S.showDeleted ? ' checked' : '') + '> 显示已删除的消息</label>' +
+      '<label class="dim" style="font-size:.78rem"><input type="checkbox" id="adAllRsn"' +
+      (S.allReason ? ' checked' : '') + '> 展开全部思考过程</label>' +
+      '<span class="dim" style="font-size:.76rem" id="adRsnCount"></span>' +
       '<span style="flex:1"></span>' +
       '<a class="btn sm" id="adExport">导出 Markdown</a>' +
       '</div>' +
@@ -447,10 +464,27 @@
       S.showDeleted = e.target.checked;
       openConv(c.id);
     });
+    // 「展开全部」只切 open 属性，不重新拉取 —— 一次网络往返换几十个 DOM 操作不划算。
+    $('#adAllRsn').addEventListener('change', function (e) {
+      S.allReason = e.target.checked;
+      Array.prototype.forEach.call(box.querySelectorAll('details.ad-rsn'), function (el) { el.open = S.allReason; });
+    });
     // 导出走 <a download>：浏览器直接存文件，不用前端拼 Blob，
     // 也不会把整篇对话再塞进一次 JSON 响应。
     $('#adExport').setAttribute('href', '/api/admin/conversations/' + encodeURIComponent(c.id) + '/export?_t=' + encodeURIComponent(S.token));
     $('#adExport').setAttribute('download', '');
+
+    // 重渲染时把「展开全部」的开关状态带回来；顺便报个数，
+    // 让"有几条没有思考过程"这件事一眼可见，不用一条条点开确认。
+    var rsnEls = box.querySelectorAll('details.ad-rsn');
+    if (S.allReason) Array.prototype.forEach.call(rsnEls, function (el) { el.open = true; });
+    var noneCount = box.querySelectorAll('.ad-rsn-none').length;
+    var cntEl = $('#adRsnCount');
+    if (cntEl) {
+      cntEl.textContent = rsnEls.length
+        ? '本对话 ' + rsnEls.length + ' 条有思考过程' + (noneCount ? '，' + noneCount + ' 条没有' : '')
+        : '本对话没有思考过程';
+    }
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 

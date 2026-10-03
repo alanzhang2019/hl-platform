@@ -555,6 +555,129 @@ async function modelTests() {
 }
 
 // ============================================================
+// 五、看板「思考过程」区块 —— 永远在，默认折叠
+// ============================================================
+// ★ 这条是被用户点名要求加的：原先写的是 `m.reasoning ? <details> : ''`，
+//   没思考过程的 AI 回复下面整块不渲染。线上 196 条 assistant 消息里只有 98 条
+//   带 reasoning，于是管理员看到半数回复"没有思考过程"，第一反应是看板丢数据了。
+//   正确做法是块一直在（折叠着），没内容如实写"本条没有输出"——
+//   把"模型没给"和"看板丢了"区分开，后者才是事故。
+//
+// ★ 不复制函数体：从 public/js/admin.js 正则抽原文 eval，
+//   保证测的是浏览器真正跑的那份代码，不是我另抄一份（抄的那份会跟源码漂移）。
+async function reasonTests() {
+  group('五、看板思考过程区块');
+
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public/js/admin.js'), 'utf8');
+  const m = src.match(/function rsnHTML\(raw\)\s*\{[\s\S]*?\n  \}/);
+  if (!m) throw new Error('public/js/admin.js 里找不到 rsnHTML —— 改名了？把测试一起改');
+  // 桩函数必须与 admin.js 里的 esc / num 语义一致（num 还带千分位）
+  const esc = function (s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  };
+  const num = function (n) { return String(Number(n) || 0).replace(/\B(?=(\d{3})+(?!\d))/g, ','); };
+  const rsnHTML = eval('(' + m[0].replace(/^function rsnHTML/, 'function') + ')');
+
+  const EMPTY = ['', undefined, null, '   \n\t '];
+
+  await t('没有思考过程时区块照样存在（核心：不许消失）', async function () {
+    EMPTY.forEach(function (v) {
+      const h = rsnHTML(v);
+      assert.ok(/ad-rsn-none/.test(h), '空值 ' + JSON.stringify(v) + ' 应渲染占位块，实际：' + h);
+      assert.ok(/本条没有输出/.test(h), '空值应如实标注，实际：' + h);
+      assert.ok(!/<details/.test(h), '空值不该生成空 details');
+    });
+  });
+
+  await t('有思考过程时渲染成折叠的 details（默认不展开）', async function () {
+    const h = rsnHTML('先算 37+45，再进位。');
+    assert.ok(/<details[^>]*class="ad-rsn"/.test(h), '应是 details.ad-rsn，实际：' + h);
+    assert.ok(/<summary>/.test(h), '要有 summary 可点开');
+    assert.ok(/class="ad-rsn-bd"/.test(h), '要有正文容器');
+    assert.ok(!/ad-rsn-none/.test(h), '有内容就别再写"没有输出"');
+    // 开标签上不能带 open —— 带了就是默认展开，与需求相反
+    const openTag = h.slice(0, h.indexOf('>') + 1);
+    assert.ok(!/\sopen[\s>=]/.test(openTag), 'details 默认必须折叠，实际开标签：' + openTag);
+  });
+
+  await t('摘要里带字数，长文有千分位', async function () {
+    // 「先算 37+45，再进位。」= 13 个字符（含空格与标点），写死能抓住 trim 行为变化
+    assert.ok(/思考过程 · 13 字/.test(rsnHTML('先算 37+45，再进位。')));
+    const long = 'x'.repeat(1234);
+    assert.ok(/思考过程 · 1,234 字/.test(rsnHTML(long)), '1234 应显示 1,234');
+  });
+
+  await t('思考过程正文做 HTML 转义（防注入）', async function () {
+    const h = rsnHTML('<script>alert(1)</script>');
+    assert.ok(!/<script>/.test(h), '裸 script 必须被转义，实际：' + h);
+    assert.ok(/&lt;script&gt;/.test(h));
+    const h2 = rsnHTML('<img src=x onerror=alert(1)>');
+    assert.ok(!/<img/.test(h2), '裸 img 必须被转义，实际：' + h2);
+  });
+
+  await t('首尾空白要 trim，纯空白算没有', async function () {
+    assert.ok(/ad-rsn-none/.test(rsnHTML('  \n  ')), '纯空白算没有内容');
+    const h = rsnHTML('  真的有内容  ');
+    assert.ok(/class="ad-rsn"/.test(h));
+    assert.ok(/思考过程 · 5 字/.test(h), '字数按 trim 后算，实际：' + h);
+  });
+
+  await t('真实数据：每条 assistant 消息都有区块（零消失）', async function () {
+    // 走真实数据层：造一条对话，assistant 一半带 reasoning、一半不带。
+    // 用独立的 space 前缀，避免污染前面几组测试的计数断言。
+    const now = D.now();
+    const spId = 'sp_reason';
+    D.run('INSERT OR REPLACE INTO spaces(id,name,name_key,passcode,tier,settings_json,created_at,last_at) VALUES(?,?,?,?,?,?,?,?)',
+      spId, '思考过程', '思考过程', '', 'self', '{}', now, now);
+    const conv = core.createConversation(spId, null, { title: '思考过程样本', model: 'deepseek/test' });
+
+    core.addMessage(spId, conv.id, { role: 'user', content: '第一题怎么做' });
+    const a1 = core.addMessage(spId, conv.id, { role: 'assistant', content: '我们先读题。' });
+    core.addMessage(spId, conv.id, { role: 'user', content: '第二题呢' });
+    core.addMessage(spId, conv.id, { role: 'assistant', content: '第二题这样做。' });
+    // addMessage 不接 reasoning（它是流式写完后单独落的），直接用 SQL 补上
+    D.run('UPDATE messages SET reasoning = ? WHERE id = ?', '我应该先引导他把题读明白，别急着给答案。', a1.id);
+
+    const d = admin.conversationDetail(conv.id);
+    const asst = d.messages.filter(function (x) { return x.role === 'assistant'; });
+    assert.strictEqual(asst.length, 2, '应有 2 条 assistant 消息');
+
+    let blocks = 0, folded = 0, none = 0;
+    asst.forEach(function (msg) {
+      const h = rsnHTML(msg.reasoning);
+      blocks++;
+      if (/class="ad-rsn"/.test(h)) folded++;
+      if (/ad-rsn-none/.test(h)) none++;
+    });
+    assert.strictEqual(blocks, 2, '2 条 assistant 都要有区块');
+    assert.strictEqual(folded, 1, '1 条有思考过程 → 折叠块');
+    assert.strictEqual(none, 1, '1 条没有 → 占位块，而不是整块消失');
+  });
+
+  await t('排序兜底：seq 全为 0 时仍按写入顺序返回', async function () {
+    // 老数据 seq 全是 0，纯 ORDER BY seq 时顺序由 SQLite 自己定，
+    // 看板可能今天明天顺序不一样。加 rowid 兜底才稳定。
+    const now = D.now();
+    const spId = 'sp_seq0';
+    D.run('INSERT OR REPLACE INTO spaces(id,name,name_key,passcode,tier,settings_json,created_at,last_at) VALUES(?,?,?,?,?,?,?,?)',
+      spId, 'seq归零', 'seq归零', '', 'self', '{}', now, now);
+    const conv = core.createConversation(spId, null, { title: 'seq 全 0', model: 'deepseek/test' });
+    const ids = [];
+    ['甲', '乙', '丙', '丁'].forEach(function (txt) {
+      const m = core.addMessage(spId, conv.id, { role: 'user', content: txt });
+      ids.push(m.id);
+    });
+    D.run('UPDATE messages SET seq = 0 WHERE conversation_id = ?', conv.id);
+
+    const d = admin.conversationDetail(conv.id);
+    const got = d.messages.map(function (m) { return m.content; });
+    assert.deepStrictEqual(got, ['甲', '乙', '丙', '丁'], 'seq 归零后仍要保持写入顺序，实际：' + got.join(','));
+  });
+}
+
+// ============================================================
 (async function main() {
   console.log('临时数据目录：' + TMP);
   try {
@@ -562,6 +685,7 @@ async function modelTests() {
     await adminTests();
     await seqTests();
     await modelTests();
+    await reasonTests();
   } catch (e) {
     console.error('\n测试运行器本身出错：', e);
     fail++;
