@@ -100,8 +100,19 @@ const footIdxInTabs = HTML.slice(iCard, iFoot).lastIndexOf('</div>\n\n    <div c
 ok('★ 页脚紧跟在 .land-err 的闭合之后（三个 pane 都已关掉）', footIdxInTabs > 0);
 
 // 分隔符：用 <span> 而不是 CSS ::after —— 窄屏要能单独 display:none
+// ★ 不写死"两个"：页脚后来多了一行（空间管理 · 使用看板），分隔符跟着多一个。
+//   要卡的不变量是「分隔符是**真元素**、且比链接行少一个」，不是具体的个数 ——
+//   钉个数只会让每次加一行页脚链接都假红一次。
 const sepCount = (footBlock.match(/class="land-sep"/g) || []).length;
-ok('两个分隔符用 <span class="land-sep"> 写成真元素', sepCount === 2, sepCount);
+ok('分隔符用 <span class="land-sep"> 写成真元素（不是 CSS ::after）',
+  sepCount >= 1 && !/\.land-legal a\s*\+\s*a::?before|::after\s*\{[^}]*content:\s*['"]·/.test(HTML), sepCount);
+ok('  └ 分隔符个数 = 页脚链接行数 - 1（不多不少）',
+  (() => {
+    const legal = (footBlock.match(/class="land-legal"[\s\S]*?<\/div>/) || [''])[0];
+    const legalLinks = (legal.match(/<a\b/g) || []).length;
+    const legalSep = (legal.match(/class="land-sep"/g) || []).length;
+    return legalLinks >= 2 && legalSep === legalLinks - 1;
+  })(), sepCount);
 
 // ---------- C. 三份文档真的有正文 ----------
 group('C. 三份文档点得开（模块级读正文）');

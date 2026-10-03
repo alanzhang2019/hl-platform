@@ -74,7 +74,7 @@ function stopServer(child) {
     const health = await waitReady();
     group('A. 健康与版本');
     // ★ 日期不写死：跨天 bump 一次就让 5 个套件同时红，纯属噪声。
-    ok('版本是 parity 构建（形如 YYYY-MM-DD-parityN）', /^\d{4}-\d{2}-\d{2}-parity\d+/.test(String(health.version)), health.version);
+    ok('版本形如 YYYY-MM-DD-<标签>（是本项目的构建，不是默认模板）', /^\d{4}-\d{2}-\d{2}-[A-Za-z][\w.-]*$/.test(String(health.version)), health.version);
     ['cards', 'flashcards'].forEach(k => ok('health 报告接口：' + k, Array.isArray(health.apis) && health.apis.indexOf(k) >= 0));
 
     group('B. 未登录拒绝');

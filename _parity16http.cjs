@@ -80,7 +80,8 @@ function todayKey() {
 
     group('A. 上线可见性');
     ok('健康检查里有 weekly 能力', (health.apis || []).indexOf('weekly') >= 0, JSON.stringify(health.apis));
-    ok('版本号带 parity', String(health.version).startsWith('2026-10-02-parity'), health.version);
+    ok('版本形如 YYYY-MM-DD-<标签>（不写死日期，也不写死标签名）',
+      /^\d{4}-\d{2}-\d{2}-[A-Za-z][\w.-]*$/.test(String(health.version)), health.version);
 
     group('B. 未登录拿不到');
     ok('GET /api/weekly 未登录 401', (await GET('/api/weekly?from=' + TODAY + '&to=' + TODAY)).status === 401);

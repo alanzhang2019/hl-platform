@@ -136,8 +136,12 @@ async function waitFinal(token, id, ms) {
     ['messages', 'tts', 'translate', 'favorites', 'upload', 'tempdocs', 'jobs', 'agents', 'search', 'shares']
       .forEach(k => ok('health 报告接口：' + k, Array.isArray(health.apis) && health.apis.indexOf(k) >= 0));
     // ★ 日期不写死：以前写的是 indexOf('2026-10-01-parity')===0，跨天 bump 一次就红 5 个套件。
-    //   要卡的是"这是 parity 构建"，不是"这是 10 月 1 号那天发的"。
-    ok('版本是 parity 构建（形如 YYYY-MM-DD-parityN）', /^\d{4}-\d{2}-\d{2}-parity\d+/.test(String(health.version)), health.version);
+    //   要卡的是"这是**本项目的构建**"，不是"这是 10 月 1 号那天发的"。
+    // ★★ 标签也不写死：版本标签从 `parityN` 换成了功能名（如 `admin-dash8`），
+    //   再卡 `parity` 就等于卡住了命名习惯 —— 那是对的行为变更，不该让套件红。
+    //   真正的不变量是「YYYY-MM-DD-<标签>」这个**形状**：有日期、有非空标签。
+    ok('版本形如 YYYY-MM-DD-<标签>（是本项目的构建，不是默认模板）',
+      /^\d{4}-\d{2}-\d{2}-[A-Za-z][\w.-]*$/.test(String(health.version)), health.version);
 
     group('B. 未登录一律拒绝（反证）');
     const guards = [

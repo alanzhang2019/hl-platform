@@ -503,8 +503,15 @@ async function main() {
   ok(has(AUTHJS, 'USER_DISABLED'), '★★ 登录会拦被禁用户（不然"停用"只是个标记）');
   ok(/resolveSession[\s\S]{0,600}u\.disabled\) return null/.test(AUTHJS),
     '★★ 已在线的眼睛离线也要被踢——会话解析时二次校验');
-  ok(/setUserDisabled[\s\S]{0,400}sessions SET ended_at/.test(AUTHJS),
+  // ★ 静态断言必须**先剥注释**再匹配：这段代码后来加了很长的解释性注释
+  //   （ended_at 是 NULL 而不是 0 的那个坑），窗口 400 字符就被注释撑爆了 ——
+  //   行为明明是对的（而且更对：判活条件补上了 `IS NULL`），却判红。
+  //   剥掉注释后只看"真的调用了 UPDATE sessions SET ended_at"这件事。
+  const authNoComment = AUTHJS.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  ok(/setUserDisabled[\s\S]{0,400}sessions SET ended_at/.test(authNoComment),
     '   └ 停用时把他的会话全部结束掉（不是等过期）');
+  ok(/sessions SET ended_at[\s\S]{0,200}ended_at IS NULL OR ended_at = 0/.test(authNoComment),
+    '   └ ★ 且判活条件带上 IS NULL（ended_at 新会话是 NULL，只写 =0 一条都踢不掉）');
 
   // 管理能力真正落到能用的地方：必须是可调度函数，不是藏在路由里的 SQL
   eq(typeof auth.listUsers, 'function', '   └ auth 暴露 listUsers');

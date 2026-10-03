@@ -229,7 +229,13 @@ async function sse(text, token, opts) {
   eq('纯数字 ID 自动左补零后进入', rightPass.status, 200);
   eq('进入的是 0002', rightPass.body.spaceId, '0002');
   const noPass = await POST('/api/space', { spaceId: '0002', passcode: '' });
-  eq('口令为空时不校验（沿用旧版行为）', noPass.status, 200);
+  // ★★ 口径已变（2026-10-03，空间口令改 scrypt 哈希存储时一起收紧）：
+  //   旧行为是"口令为空就不校验"—— 那对**设了口令**的空间等于把门敞开，
+  //   任何人不填口令就能进。现在的语义是「口令为空」只对**本来就没设口令**的空间成立。
+  //   0002 这条夹具是**带口令**建的，所以空口令必须被拒。
+  eq('★★ 空口令进「有口令的空间」被拒（403）—— 旧行为是放行，等于把门敞开', noPass.status, 403);
+  const openPass = await POST('/api/space', { spaceId: '0003', passcode: '' });
+  eq('  └ 反证：本来就没设口令的空间，空口令照样进（"开放"语义没被一并砍掉）', openPass.status, 200);
   const ghost = await POST('/api/space', { spaceId: '9999', passcode: '' });
   eq('不存在的空间返回 404', ghost.status, 404);
   const badId = await POST('/api/space', { spaceId: '!!!', passcode: '' });

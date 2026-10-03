@@ -17,9 +17,10 @@
  *
  * 退出码：全绿 0，有失败 1。
  */
-// ★ 只卡"是不是 parity 构建"，不卡具体日期 —— 写死日期后每次跨天 bump 都要回来改，
-//   忘了就会看到一条假红。要核对具体版本时用 --expect 传精确值。
-const EXPECT_PREFIX = /^\d{4}-\d{2}-\d{2}-parity/;
+// ★ 只卡"形状"（YYYY-MM-DD-<标签>），不卡具体日期、**也不卡标签名**。
+//   日期写死 ⇒ 跨天 bump 必假红；标签写死 ⇒ 标签从 parityN 改成功能名
+//   （如 admin-dash8）时又假红一遍。要核对具体版本用 --expect 传精确值。
+const EXPECT_PREFIX = /^\d{4}-\d{2}-\d{2}-[A-Za-z][\w.-]*$/;
 
 const argv = process.argv.slice(2);
 const base = (argv.find(a => /^https?:\/\//.test(a)) || '').replace(/\/+$/, '');
@@ -57,7 +58,7 @@ async function getJSON(url, token) {
 
 (async () => {
   console.log('线上验证：' + base);
-  console.log('  预期版本：parity 构建（YYYY-MM-DD-parityN）' + (expectExact ? '，精确 ' + expectExact : ''));
+  console.log('  预期版本：形如 YYYY-MM-DD-<标签>' + (expectExact ? '，精确 ' + expectExact : ''));
 
   // ---------- 1. 后端真的活着，且 .env 被读到了 ----------
   group('1. 后端与 .env');
@@ -72,7 +73,7 @@ async function getJSON(url, token) {
   if (health) {
     ok('ok = true', health.ok === true, JSON.stringify(health).slice(0, 120));
     const v = String(health.version || '');
-    ok('版本是 parity 构建（YYYY-MM-DD-parityN）', EXPECT_PREFIX.test(v), v);
+    ok('版本形如 YYYY-MM-DD-<标签>（不写死日期与标签名）', EXPECT_PREFIX.test(v), v);
     if (expectExact) ok('版本精确等于 ' + expectExact, v === expectExact, v);
     // ★ 这条是"上传的 .env 生效了"的唯一判据。mockLLM=true 说明线上在跑假模型，
     //   而服务本身、页面、测试全都会是绿的 —— 只在这里露馅。
