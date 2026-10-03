@@ -69,10 +69,10 @@ const adminDash = require('./server/admin');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-03-admin-dash4';
+const APP_VERSION = '2026-10-03-admin-dash5';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const ADMIN_TOKENS = new Set();
 
 // ---------- 工具 ----------
@@ -624,6 +624,32 @@ async function handleApi(req, res, u) {
     const tk = require('crypto').createHash('sha256').update(ADMIN_PASSWORD + Date.now() + Math.random()).digest('hex');
     ADMIN_TOKENS.add(tk);
     return sendJSON(res, 200, { ok: true, token: tk });
+  }
+  if (p === '/api/admin/password' && method === 'POST') {
+    if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED', message: '未设置管理密码' });
+    if (!ADMIN_TOKENS.has(reqToken(req))) return sendJSON(res, 401, { error: 'NO_AUTH', message: '请先登录' });
+    const b = await readBody(req);
+    if (b.oldPassword !== ADMIN_PASSWORD) {
+      return sendJSON(res, 401, { error: 'BAD_OLD_PASSWORD', message: '旧密码不正确' });
+    }
+    const newPw = String(b.newPassword || '').trim();
+    if (newPw.length < 8) {
+      return sendJSON(res, 400, { error: 'WEAK_PASSWORD', message: '新密码至少需要 8 个字符' });
+    }
+    if (newPw !== String(b.confirmPassword || '').trim()) {
+      return sendJSON(res, 400, { error: 'MISMATCH', message: '两次输入的新密码不一致' });
+    }
+    try {
+      const envPath = path.join(__dirname, '.env');
+      let envContent = fs.readFileSync(envPath, 'utf8');
+      envContent = envContent.replace(/^ADMIN_PASSWORD=.*$/m, 'ADMIN_PASSWORD=' + newPw);
+      fs.writeFileSync(envPath, envContent, 'utf8');
+    } catch (e) {
+      return sendJSON(res, 500, { error: 'WRITE_FAILED', message: '写入 .env 文件失败：' + e.message });
+    }
+    ADMIN_PASSWORD = newPw;
+    ADMIN_TOKENS.clear();
+    return sendJSON(res, 200, { ok: true, message: '密码已修改，请使用新密码重新登录' });
   }
   if (p === '/api/admin/spaces' && method === 'GET') {
     if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });

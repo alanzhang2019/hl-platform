@@ -131,13 +131,46 @@
     $('#adMain').style.display = 'none';
     $('#adGate').style.display = '';
     $('#adLogout').style.display = 'none';
+    $('#adChangePw').style.display = 'none';
   }
 
   function enter() {
     $('#adGate').style.display = 'none';
     $('#adMain').style.display = '';
     $('#adLogout').style.display = '';
+    $('#adChangePw').style.display = '';
     loadAll();
+  }
+
+  // ---------- 修改密码 ----------
+  function openPwDialog() {
+    $('#adPwOld').value = '';
+    $('#adPwNew').value = '';
+    $('#adPwConfirm').value = '';
+    $('#adPwErr').textContent = '';
+    $('#adPwModal').style.display = '';
+    setTimeout(function () { $('#adPwOld').focus(); }, 50);
+  }
+  function closePwDialog() { $('#adPwModal').style.display = 'none'; }
+  function savePw() {
+    var oldPw = $('#adPwOld').value;
+    var newPw = $('#adPwNew').value;
+    var confirmPw = $('#adPwConfirm').value;
+    var err = $('#adPwErr');
+    if (!oldPw) { err.textContent = '请输入旧密码'; return; }
+    if (!newPw || newPw.length < 8) { err.textContent = '新密码至少需要 8 个字符'; return; }
+    if (newPw !== confirmPw) { err.textContent = '两次输入的新密码不一致'; return; }
+    err.textContent = '';
+    api('/api/admin/password', {
+      method: 'POST',
+      body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw, confirmPassword: confirmPw }),
+    }).then(function (j) {
+      alert(j.message || '密码已修改');
+      closePwDialog();
+      logout();
+    }).catch(function (e) {
+      err.textContent = e.message || '修改失败';
+    });
   }
 
   // ---------- 渲染：KPI ----------
@@ -667,6 +700,11 @@
     $('#adLogin').addEventListener('click', doLogin);
     $('#adPw').addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
     $('#adLogout').addEventListener('click', logout);
+    $('#adChangePw').addEventListener('click', openPwDialog);
+    $('#adPwCancel').addEventListener('click', closePwDialog);
+    $('#adPwSave').addEventListener('click', savePw);
+    $('#adPwModal').addEventListener('click', function (e) { if (e.target === this) closePwDialog(); });
+    $('#adPwConfirm').addEventListener('keydown', function (e) { if (e.key === 'Enter') savePw(); });
     $('#adReload').addEventListener('click', function () { $('#adSpaceDetail').style.display = 'none'; loadAll(); });
 
     $('#adRange').addEventListener('click', function (e) {
