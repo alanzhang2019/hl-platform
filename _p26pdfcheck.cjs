@@ -157,6 +157,112 @@ function plainTextPdf(text) {
     'trailer << /Root 1 0 R >>\n%%EOF\n', 'latin1');
 }
 
+/** 造一段 bfchar CMap 文本（`pairs` 是 [cid, 字符] 的数组） */
+function cmapFor(pairs) {
+  const body = pairs.map(([cid, ch]) =>
+    '<' + cid.toString(16).toUpperCase().padStart(4, '0') + '> <' + utf16beHex(ch) + '>').join('\n');
+  return 'begincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n' +
+    pairs.length + ' beginbfchar\n' + body + '\nendbfchar\nendcmap\n';
+}
+
+/** deflate 一段流数据；末尾补一个**不是** 0x0a/0x0d 的字节 ——
+ *  scanObjects 会把流尾的换行剪掉，若压缩流最后一字节恰好是换行就会被剪断、解压失败。 */
+function zstream(data) {
+  const d = zlib.deflateSync(data);
+  return d[d.length - 1] === 0x0a || d[d.length - 1] === 0x0d
+    ? Buffer.concat([d, Buffer.from([0x20])]) : d;
+}
+
+/** 一段确定性伪随机字节（当"二进制"用；不用 Math.random，测试要可复现） */
+function junkBytes(n, seed) {
+  const b = Buffer.alloc(n);
+  for (let i = 0; i < n; i++) b[i] = ((i * 2654435761 + (seed || 0)) >>> 16) & 0xFF;
+  return b;
+}
+
+/**
+ * 合成一份"脏"PDF —— 正文很小，旁边躺着两类**解压出来一大坨二进制**的东西：
+ *   ① 内嵌字体程序（`/Length1` 是字体程序的标志）
+ *   ② 透明组 Form XObject（`/Subtype /Form` + 嵌套 `/Group << … >>`）
+ * 而且**页字典里也带嵌套 `/Group << … >>`**（Word / InDesign 导出极常见）。
+ *
+ * ★ 为什么要造这一份：旧写法用 `raw.lastIndexOf('<<')` 反查"这个流属于哪个字典"，
+ *   碰到嵌套字典会切到内层 `<<`，于是既看不出 `/Filter /FlateDecode`、
+ *   也看不出这是字体程序，把**压缩后的二进制**当内容流喂进文本解析器，
+ *   吐出成百上千倍的垃圾把正文淹掉 —— 整份 PDF 被判"读不出来"。
+ *   用户那份 10 页测评报告就是这么死的。
+ */
+function dirtyPdf() {
+  // ★ 字数必须 ≥8：looksLikeText 的长度门槛是 8，夹具自己的正文得先达标，
+  //   否则"读出来了"和"没读出来"分不清，测的就不是流选择了。
+  const chars = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬'];
+  const hexText = chars.map((_, i) => (i + 1).toString(16).toUpperCase().padStart(4, '0')).join('');
+  const content = 'BT /F1 12 Tf 72 720 Td\n<' + hexText + '> Tj\nET\n';
+  const cmapStored = zstream(Buffer.from(cmapFor(chars.map((ch, i) => [i + 1, ch])), 'latin1'));
+  const fontBin = junkBytes(40000, 0);
+  Buffer.from('FONTMARKER').copy(fontBin, 20000);      // 独有标记，用来断言"没被当正文"
+  const fontStored = zstream(fontBin);
+  const formStored = zstream(junkBytes(30000, 7919));
+  return Buffer.from(
+    '%PDF-1.4\n' +
+    '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n' +
+    '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n' +
+    // ★ 页字典里带嵌套 /Group
+    '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] ' +
+      '/Group << /S /Transparency /CS /DeviceGray /I true >> ' +
+      '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n' +
+    '4 0 obj << /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream\nendobj\n' +
+    '5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+SimSun /Encoding /Identity-H ' +
+      '/ToUnicode 6 0 R /DescendantFonts [7 0 R] >> endobj\n' +
+    '6 0 obj << /Filter /FlateDecode /Length ' + cmapStored.length +
+      ' >>\nstream\n' + cmapStored.toString('latin1') + '\nendstream\nendobj\n' +
+    '7 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+SimSun >> endobj\n' +
+    // ★ 字体程序二进制
+    '8 0 obj << /Length1 40000 /Filter /FlateDecode /Length ' + fontStored.length +
+      ' >>\nstream\n' + fontStored.toString('latin1') + '\nendstream\nendobj\n' +
+    // ★ 透明组 Form XObject（字典里同样有嵌套 /Group）
+    '9 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 595 842] ' +
+      '/Group << /Type /Group /S /Transparency /CS /DeviceGray /I true >> ' +
+      '/Filter /FlateDecode /Length ' + formStored.length +
+      ' >>\nstream\n' + formStored.toString('latin1') + '\nendstream\nendobj\n' +
+    'trailer << /Root 1 0 R >>\n%%EOF\n', 'latin1');
+}
+
+/**
+ * 合成一份**两个子集字体、CID 空间故意重叠**的 PDF：
+ *   /F1 的 CID 1..4 → 题目训练      /F2 的 CID 1..4 → 考点盲区
+ * ★ 这是"合成一张全局映射表"必然出错的地方：合并表里 CID 1..4 只留先到的
+ *   「题目训练」，于是 /F2 那行被解成「题目训练」——实测在用户报告里表现为
+ *   「已通过题**明**」（应为「题目」）、「高频标**线**」（应为「考点」）。
+ */
+function twoFontPdf() {
+  const f1 = [[1, '题'], [2, '目'], [3, '训'], [4, '练']];
+  const f2 = [[1, '考'], [2, '点'], [3, '盲'], [4, '区']];
+  const c1 = zstream(Buffer.from(cmapFor(f1), 'latin1'));
+  const c2 = zstream(Buffer.from(cmapFor(f2), 'latin1'));
+  const hex = '<0001000200030004>';
+  const content = 'BT /F1 12 Tf 72 720 Td\n' + hex + ' Tj\nET\n' +
+                  'BT /F2 12 Tf 72 700 Td\n' + hex + ' Tj\nET\n';
+  return Buffer.from(
+    '%PDF-1.4\n' +
+    '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n' +
+    '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n' +
+    '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] ' +
+      '/Resources << /Font << /F1 5 0 R /F2 8 0 R >> >> /Contents 4 0 R >> endobj\n' +
+    '4 0 obj << /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream\nendobj\n' +
+    '5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+SimSun /Encoding /Identity-H ' +
+      '/ToUnicode 6 0 R /DescendantFonts [7 0 R] >> endobj\n' +
+    '6 0 obj << /Filter /FlateDecode /Length ' + c1.length +
+      ' >>\nstream\n' + c1.toString('latin1') + '\nendstream\nendobj\n' +
+    '7 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+SimSun >> endobj\n' +
+    '8 0 obj << /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+KaiTi /Encoding /Identity-H ' +
+      '/ToUnicode 9 0 R /DescendantFonts [10 0 R] >> endobj\n' +
+    '9 0 obj << /Filter /FlateDecode /Length ' + c2.length +
+      ' >>\nstream\n' + c2.toString('latin1') + '\nendstream\nendobj\n' +
+    '10 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+KaiTi >> endobj\n' +
+    'trailer << /Root 1 0 R >>\n%%EOF\n', 'latin1');
+}
+
 // ================= 断言 =================
 function main() {
   console.log('批次26（内嵌子集字体 PDF 能不能读）：\n');
@@ -240,8 +346,11 @@ function main() {
     eq(r2.cidMapped, true, '  └ 同样走的是 CID 映射');
 
     // D3：CMap 未压缩（没有 /Filter）也要能读
-    const r3 = extract.extractPdf(subsetFontPdf({ chars: ['甲', '乙', '丙'], toUnicode: true, cmapZlib: false }));
-    ok(has(r3.text, '甲乙丙'), 'D3 未压缩的 CMap 流也能读', r3.text);
+    // ★ 这里必须给够字数：`looksLikeText` 的门槛是 8 个字符，3 个字×2 处只有 6 个。
+    //   旧写法能"通过"是因为它把 **CMap 流也当正文**解了、凑够了字数 ——
+    //   那正是 G 组要禁止的行为，所以夹具得自己把字数给足，不能靠 bug 撑着。
+    const r3 = extract.extractPdf(subsetFontPdf({ chars: ['甲', '乙', '丙', '丁', '戊'], toUnicode: true, cmapZlib: false }));
+    ok(has(r3.text, '甲乙丙丁戊'), 'D3 未压缩的 CMap 流也能读', r3.text);
 
     // D4：★ 没有 ToUnicode —— 不许把它读成乱码冒充成功
     const noMap = subsetFontPdf({ chars: ['你', '好'], toUnicode: false });
@@ -305,11 +414,41 @@ function main() {
     eq(r.scanned, true, 'E2 ★ 有图 ⇒ 仍归到 scanned（让 OCR 去试），不武断判死');
   }
 
+  // ---------- G. ★★ 只解析真正的页面内容流 ----------
+  // 背景：用户那份 10 页测评报告，字体映射表**是齐的**，却整份读不出来。
+  // 真因是旧写法把**内嵌字体程序的二进制**解压后当正文解析，吐出 1.8MB 垃圾
+  // 把 8KB 正文彻底淹没。这一组钉的就是"只认 /Contents"。
+  {
+    const buf = dirtyPdf();
+    const r = extract.extractPdf(buf);
+    ok(has(r.text, '甲乙丙丁戊己庚辛壬'), 'G1 ★ 页字典带嵌套 /Group、旁边躺着字体程序与透明组时，正文照样读得出', r.text);
+    ok(!has(r.text, 'FONTMARKER'), 'G2 ★★ 字体程序流**不许**被当成正文（旧写法会把它解压后喂进文本解析器）');
+    // ★ 最严的一条：抽出来必须**恰好**是内容流里那串。
+    //   多一个字，就说明又去解析了非内容流（CMap / 字体 / Form 里都能解出字来）。
+    eq(r.text.replace(/\s+/g, ''), '甲乙丙丁戊己庚辛壬', 'G3 ★★ 抽出的文字必须**恰好**等于内容流里的正文（多一个字就是把非内容流当正文了）');
+    eq(r.scanned, false, '  └ 读出来了就不该排队 OCR');
+    eq(r.pages, 1, '  └ 页数照旧从 /Type /Page 数出来');
+  }
+
+  // ---------- H. ★★ 按字体分表：同一 CID 在不同子集字体里是**不同的字** ----------
+  // 背景：一份 PDF 里常有 9～27 个子集字体，CID 空间互相独立。
+  // 合成一张全局表时"先到的赢"，后一个字体里同号的字就被译成前一个的字 ——
+  // 实测表现为「已通过题**明**」（应为「题目」）、「高频标**线**」（应为「考点」）。
+  // 这种**看着像人话的错字**比读不出来更危险：AI 会照着错字讲。
+  {
+    const buf = twoFontPdf();
+    const r = extract.extractPdf(buf);
+    ok(has(r.text, '题目训练'), 'H1 ★ 多字体 PDF：/F1 的映射用对了', r.text);
+    ok(has(r.text, '考点盲区'), 'H2 ★★ /F2 里同号 CID 必须按 /F2 自己的表解（合成一张全局表这里会解成「题目训练」）', r.text);
+    ok(!has(r.text, '题明') && !has(r.text, '考目'), '  └ 且不许出现串味的错字（题明 / 考目）');
+  }
+
   // ---------- F. 静态：接线与顺序 ----------
   {
     const EX = fs.readFileSync(path.join(__dirname, 'server/extract.js'), 'utf8');
-    // ★ 钉"调用点"不是"字符串存在"
-    ok(/textFromContentStream\([^)]*cidMap/.test(EX), 'F1 `textFromContentStream` 的调用点**真的传了** cidMap（不是只在定义处有个参数）');
+    // ★ 钉"调用点"不是"字符串存在"：从 `const txt = ` 起头才算调用点，
+    //   否则函数**定义**里的 `(s, cidMap)` 也能让这条断言变绿（等于没测）。
+    ok(/const txt = textFromContentStream\([\s\S]{0,80}?cidMap/.test(EX), 'F1 `textFromContentStream` 的调用点**真的传了** cidMap（不是只在定义处有个参数）');
     ok(/const\s+cidMap\s*=/.test(EX), 'F2 extractPdf 里真的建了 cidMap');
     ok(/toUnicodeMaps\(buf\)/.test(EX), 'F3 extractPdf 里真的调了 toUnicodeMaps');
     // ToUnicode 要在**抽文字之前**就收齐
@@ -318,6 +457,16 @@ function main() {
     ok(idxMap >= 0 && idxLoop >= 0 && idxMap < idxLoop, 'F4 ★ 先收映射、后抽文字（顺序倒了等于没读）');
     // 不许再把"抽不出"一律说成"内嵌子集字体"（那是旧的一刀切文案）
     ok(!has(EX, '这份 PDF 的文字用了内嵌子集字体，没能抽出可用的文字。建议'), 'F5 旧的一刀切文案已清掉（改为按有无图分别说明）');
+    // ★★ 不许再用 `lastIndexOf('<<')` 反查"这个流属于哪个字典" ——
+    //    碰到嵌套字典（页字典里的 /Group << … >>）会切到内层，判不出 FlateDecode，
+    //    于是把压缩后的字体二进制当正文喂进去（G 组的病根）。
+    ok(!/lastIndexOf\('<<'/.test(EX), 'F6 ★★ 已不再用 lastIndexOf(<<) 反查流字典（嵌套字典会切错）');
+    // ★ 真的按 /Type /Page → /Contents 取流，而不是"所有 stream 都试一遍"
+    ok(/dictRefList\(pg\.dict, 'Contents'\)/.test(EX), 'F7 ★ extractPdf 真的按 /Contents 取页面内容流');
+    // ★ 调用点真的传了按字体分好的表（H 组靠它才成立）
+    ok(/cidMap, fmaps\)/.test(EX), 'F8 ★ 调用点真的传了按字体分好的表（不传就退回全局表 ⇒ 又串味）');
+    // 兜底路径必须滤掉二进制流，否则老毛病会在没有 /Type /Page 的文件上复发
+    ok(has(EX, '/Length[123]'), 'F9 兜底扫全流时滤掉字体程序等二进制流');
   }
 
   console.log('\n通过 ' + pass + ' 项，失败 ' + fail + ' 项');

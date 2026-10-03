@@ -249,6 +249,50 @@ function toUnicodeMaps(buf) {
   return { map: merged, fonts: found };
 }
 
+/**
+ * 取**某一页**的字体映射表：`/F1` → (CID → 字符)。
+ *
+ * ★ 为什么必须按页、按资源名分表，而不能只用 toUnicodeMaps 那张全局合并表：
+ *   一份 PDF 里往往嵌了 9～27 个子集字体，每个子集的 CID 空间**互相独立** ——
+ *   CID 7 在 /F1 里是「目」，在 /F2 里可能完全是别的字。合并成一张表时
+ *   「先到的赢」（见 toUnicodeMaps），后一个字体里同号的字就被译成前一个的字。
+ *   实测在用户的 10 页测评报告上译出「已通过题**明**」（应为「题目」）、
+ *   「高频标**线**」（应为「考点」）、「当前平**级**」（应为「评级」）——
+ *   这类**看着像人话、其实是错字**的结果比整段读不出来更危险：
+ *   AI 会照着错字讲解，用户还以为是模型不认识这个词。
+ *
+ * /Resources 允许写在 /Pages 父节点上由子页继承（很常见），所以要沿 /Parent 往上找。
+ *
+ * @returns {Map<string, Map<number,string>>} 资源名（如 'F1'，不含斜杠）→ CID 映射
+ */
+function fontMapsForPage(raw, pageDict, objs, buf) {
+  let resDict = dictValue(raw, pageDict, 'Resources', objs);
+  let d = pageDict, guard = 0;
+  while (!resDict && guard++ < 8) {
+    const pn = dictRefNum(d, 'Parent');
+    if (pn == null || !objs.has(pn)) break;
+    d = objs.get(pn).dict;
+    resDict = dictValue(raw, d, 'Resources', objs);
+  }
+  const maps = new Map();
+  if (!resDict) return maps;
+  const fontDict = dictValue(raw, resDict, 'Font', objs);
+  if (!fontDict) return maps;
+  const re = /\/([A-Za-z0-9_.#-]+)\s+(\d+)\s+\d+\s+R/g;
+  let m;
+  while ((m = re.exec(fontDict)) !== null) {
+    const fo = objs.get(Number(m[2]));
+    if (!fo) continue;
+    const ref = dictRefNum(fo.dict, 'ToUnicode');
+    if (ref == null) continue;
+    const co = objs.get(ref);
+    if (!co || co.dataStart < 0) continue;
+    const cm = parseToUnicode(buf.slice(co.dataStart, co.dataEnd).toString('latin1'));
+    if (cm.size) maps.set(m[1], cm);
+  }
+  return maps;
+}
+
 /** 把一段十六进制字符串（`<...>` 里的内容，已去掉尖括号与空白）解成文字。
  *  @param {Map<number,string>|null} cidMap CID→字符（来自 ToUnicode） */
 function decodeHexText(hex, cidMap) {
@@ -272,11 +316,16 @@ function decodeHexText(hex, cidMap) {
 }
 
 /** 从一段已解码的内容流里抽文字。
- *  @param {Map<number,string>|null} cidMap CID→字符（来自 ToUnicode）；没有就尽力而为 */
-function textFromContentStream(s, cidMap) {
+ *  @param {Map<number,string>|null} cidMap CID→字符（来自 ToUnicode）；没有就尽力而为
+ *  @param {Map<string,Map<number,string>>|null} [fontMaps] 按资源名分好的字体表
+ *         （`F1` → CID→字符，见 fontMapsForPage）。传了就按流里 `/Fx … Tf` 的
+ *         切换用**当前字体自己**的表；没传（或该字体不在表里）退回 cidMap。 */
+function textFromContentStream(s, cidMap, fontMaps) {
   let out = '';
-  const re = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>|\bT[dD]\b|\bT\*\b|\bTJ\b|\bTj\b|\bET\b/g;
+  const re = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>|\/([A-Za-z0-9_.#-]+)\s+[-+]?[\d.]+\s+Tf|\bT[dD]\b|\bT\*\b|\bTJ\b|\bTj\b|\bET\b/g;
   let m, pending = '';
+  // ★ 当前生效的映射表。初始给全局表，遇到 `Tf` 就换成那个字体自己的。
+  let cur = cidMap;
   while ((m = re.exec(s)) !== null) {
     const tok = m[0];
     if (tok[0] === '(') {
@@ -295,12 +344,16 @@ function textFromContentStream(s, cidMap) {
       //    而那是**纯 ASCII**，looksLikeText 会放行 ⇒ 原始码冒充正文（实测踩到）。
       const m2 = /^<([0-9A-Fa-f\s]+)>$/.exec(un);
       if (m2) {
-        pending += decodeHexText(m2[1].replace(/\s+/g, ''), cidMap);
+        pending += decodeHexText(m2[1].replace(/\s+/g, ''), cur);
       } else {
         pending += un;
       }
     } else if (tok[0] === '<') {
-      pending += decodeHexText(tok.slice(1, -1).replace(/\s+/g, ''), cidMap);
+      pending += decodeHexText(tok.slice(1, -1).replace(/\s+/g, ''), cur);
+    } else if (m[1]) {
+      // `/F1 12 Tf` —— 换字体。用**这个字体自己**的映射表；
+      // 它没带 ToUnicode 时退回全局表（有总比没有好，但仍不"猜"）。
+      cur = (fontMaps && fontMaps.get(m[1])) || cidMap;
     } else if (tok === 'Td' || tok === 'TD' || tok === 'T*') {
       if (pending) { out += pending + '\n'; pending = ''; }
     } else if (tok === 'TJ' || tok === 'Tj') {
@@ -351,9 +404,17 @@ function scanObjects(buf) {
   return objs;
 }
 
+/** 在字典文本里定位 `/Key` 的位置。
+ *  ★ 后面**不能**紧跟字母数字，否则 `/Font` 会命中 `/FontDescriptor` ——
+ *    那是字体字典里的另一个键，取错了就会拿到完全不相干的字典。 */
+function findKey(dict, key) {
+  const m = new RegExp('/' + key + '(?![A-Za-z0-9])').exec(dict);
+  return m ? m.index : -1;
+}
+
 /** 取 `/Key` 的值：间接引用返回它指向对象的字典，内联则返回 `<<…>>` / `[…]` 原文 */
 function dictValue(raw, dict, key, objs) {
-  const idx = dict.indexOf('/' + key);
+  const idx = findKey(dict, key);
   if (idx < 0) return null;
   const rest = dict.slice(idx);
   const rm = /^\/[A-Za-z0-9_.#-]+\s+(\d+)\s+\d+\s+R/.exec(rest);
@@ -461,25 +522,54 @@ function extractPdf(buf) {
   const tu = toUnicodeMaps(buf);
   const cidMap = tu.map.size ? tu.map : null;
   const chunks = [];
-  const re = /stream\r?\n?/g;
-  let m;
-  while ((m = re.exec(raw)) !== null) {
-    const start = m.index + m[0].length;
-    const end = raw.indexOf('endstream', start);
-    if (end < 0) break;
-    // 往前看字典，判断是否 FlateDecode
-    const dictStart = Math.max(0, raw.lastIndexOf('<<', m.index));
-    const dict = raw.slice(dictStart, m.index);
-    let data = buf.slice(start, end);
-    // 去掉尾部换行
-    while (data.length && (data[data.length - 1] === 0x0a || data[data.length - 1] === 0x0d)) data = data.slice(0, -1);
-    if (/FlateDecode/.test(dict)) {
-      const inf = tryInflate(data);
-      if (!inf) continue;
-      data = inf;
+  const objs = scanObjects(buf);
+
+  // ★★ 只解析**真正的页面内容流**，不再"把所有 stream 都当文字流试一遍"。
+  //
+  //    为什么这是关键：PDF 里的 stream 大半不是文字 —— 内嵌字体程序（/Length1）、
+  //    页面位图（/Subtype /Image）、ICC 色彩配置、XMP 元数据，全是二进制。
+  //    旧写法从 `stream` 关键字往前反查"这个流属于哪个字典"（`lastIndexOf` 找 `<<`），
+  //    遇到**嵌套字典**
+  //    （页字典里极常见的 `/Group << /S /Transparency … >>`）会切到错的位置，
+  //    于是既判不出 FlateDecode、也判不出这是不是字体，把**字体二进制**解压后
+  //    直接喂给文本解析器 —— 字体里散落的 `(`、`<…>`、`Tj` 字节被当成文字操作符，
+  //    吐出 **1.8MB** 垃圾，把真正的 8KB 正文彻底淹没，整份 PDF 于是被判"读不出来"。
+  //    （用户那份 10 页洛谷测评报告实测就是死在这里，而不是死在 CID 映射上。）
+  //
+  //    正确做法：走 scanObjects —— 它取 `obj` 到 `stream` 之间的**全部**内容，
+  //    天然容忍嵌套字典；再顺着 /Type /Page → /Contents 拿内容流。
+  const pageObjs = [];
+  objs.forEach(o => { if (/\/Type\s*\/Page(?![A-Za-z])/.test(o.dict)) pageObjs.push(o); });
+  pageObjs.sort((a, b) => a.num - b.num);        // 页对象在文件里的先后 ≈ 页码先后
+  for (const pg of pageObjs) {
+    const fmaps = fontMapsForPage(raw, pg.dict, objs, buf);
+    let refs = dictRefList(pg.dict, 'Contents');
+    if (!refs.length) { const one = dictRefNum(pg.dict, 'Contents'); if (one != null) refs = [one]; }
+    for (const cr of refs) {
+      const co = objs.get(cr);
+      if (!co || co.dataStart < 0) continue;
+      let d = buf.slice(co.dataStart, co.dataEnd);
+      if (/FlateDecode/.test(co.dict)) { const inf = tryInflate(d); if (!inf) continue; d = inf; }
+      const txt = textFromContentStream(d.toString('latin1'), cidMap, fmaps);
+      if (txt.trim()) chunks.push(txt);
     }
-    const txt = textFromContentStream(data.toString('latin1'), cidMap);
-    if (txt.trim()) chunks.push(txt);
+  }
+
+  // 兜底：一个 /Type /Page 都没有（或页面里没挂 /Contents）时，退回"扫全部流"，
+  // 但**必须滤掉二进制流** —— 否则又会重现上面那 1.8MB 垃圾把正文淹掉的老毛病。
+  if (!chunks.length) {
+    objs.forEach(o => {
+      if (o.dataStart < 0) return;
+      if (/\/Length[123]\b|\/Subtype\s*\/Image|\/Type\s*\/(Metadata|ObjStm|XRef|EmbeddedFile)|\/Subtype\s*\/(Type1C|OpenType|CIDFontType0C)/.test(o.dict)) return;
+      let d = buf.slice(o.dataStart, o.dataEnd);
+      if (/FlateDecode/.test(o.dict)) { const inf = tryInflate(d); if (!inf) return; d = inf; }
+      const txt = textFromContentStream(d.toString('latin1'), cidMap, null);
+      // ★ 兜底路径再上一道闸：**单个流自己得像文字**才收。
+      //   光靠上面的"按字典名滤"挡不住所有二进制（比如透明组 Form XObject
+      //   解压出来是软掩膜数据，字典上没有任何可辨标志）；而二进制几乎必然
+      //   过不了 looksLikeText 的可用字符比例。宁可少收，也不能让垃圾淹掉正文。
+      if (looksLikeText(txt)) chunks.push(txt);
+    });
   }
   let text = chunks.join('\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   // 去掉控制字符；以及 UTF-16 十六进制串开头常见的 BOM（<FEFF...> 是 CID 字体的标准写法）
