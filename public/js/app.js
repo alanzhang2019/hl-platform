@@ -5963,6 +5963,22 @@
       const c = ev.target.closest('.skill-c'); if (!c) return;
       ev.preventDefault(); toggleSkill(c.dataset.id);
     });
+    // 全部启用（批次31）：对称于下面的「全部取消」。
+    // ★ 只启用**当前档位可用**的（!locked）—— 锁定的即便写进 skill_grants，
+    //   promptsFor 也会静默过滤掉，等于没开。服务端 setEnabled 也会逐条校验档位，
+    //   这里先过滤只是为了让 toast 报出的数字说实话。
+    $('#skillEnableAll').addEventListener('click', async () => {
+      const usable = (S.skills || []).filter(s => !s.locked).map(s => s.id);
+      if (!usable.length) { toast('当前档位下没有可用的能力'); return; }
+      const on = {};
+      (S.skillEnabled || []).forEach(id => { on[id] = 1; });
+      if (usable.every(id => on[id])) { toast('可用能力已全部启用'); return; }
+      try {
+        await api('/api/skills/enabled', { method: 'POST', body: { skillIds: usable } });
+        await loadSkills();
+        toast('已启用 ' + usable.length + ' 个能力，下一句对话就生效');
+      } catch (e) { toast(e.message); }
+    });
     $('#skillClear').addEventListener('click', async () => {
       if (!(S.skillEnabled || []).length) { toast('当前没有启用任何能力'); return; }
       try {
