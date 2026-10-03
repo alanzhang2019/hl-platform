@@ -1,0 +1,83 @@
+'use strict';
+/* 反证：把批次26 修复的三处关键点分别拔掉，套件必须变红。
+   ★ 本机 execFileSync / spawnSync 一律 EBUSY ⇒ **必须同进程跑**（项目既有判据）。
+   套件末尾有 process.exit ⇒ 在这里把它换成抛异常来接管控制权。 */
+const fs = require('fs');
+const path = require('path');
+
+const target = path.join(__dirname, 'server/extract.js');
+const SUITE = path.join(__dirname, '_p26pdfcheck.cjs');
+const good = fs.readFileSync(target, 'utf8');
+
+/** 同进程跑一次套件，返回 {pass, fail} */
+function runSuite() {
+  // ★ 清 require.cache（否则第二次读到的是第一次编译好的 extract）——项目既有判据
+  Object.keys(require.cache).forEach(k => {
+    if (k.includes('extract') || k.includes('_p26')) delete require.cache[k];
+  });
+  const logs = [];
+  const origOut = process.stdout.write.bind(process.stdout);
+  const origLog = console.log;
+  const origExit = process.exit;
+  const origErrLog = console.error;
+  process.exit = function () { throw new Error('__SUITE_EXIT__'); };
+  console.log = function () { logs.push(Array.prototype.join.call(arguments, ' ')); };
+  console.error = function () { logs.push(Array.prototype.join.call(arguments, ' ')); };
+  try {
+    require(SUITE);
+  } catch (e) {
+    if (!/__SUITE_EXIT__/.test(e.message)) logs.push('THROW ' + e.message);
+  } finally {
+    console.log = origLog; console.error = origErrLog; process.exit = origExit;
+    Object.keys(require.cache).forEach(k => {
+      if (k.includes('extract') || k.includes('_p26')) delete require.cache[k];
+    });
+  }
+  const txt = logs.join('\n');
+  const m = txt.match(/通过 (\d+) 项，失败 (\d+) 项/);
+  return { pass: m ? +m[1] : null, fail: m ? +m[2] : null, txt };
+}
+
+const CASES = [
+  ['基线（修好的版本）', null, false],
+  ['拔掉①：CMap 只认 gzip 头（第一版踩的 bug）',
+    s => s.replace(/function cmapBytes\(buf\) \{[\s\S]*?\n\}/,
+      'function cmapBytes(buf) {\n' +
+      '  if (!buf || !buf.length) return \'\';\n' +
+      '  if (buf[0] === 0x1f && buf[1] === 0x8b) { const z = tryInflate(buf); if (z) return z; }\n' +
+      '  return buf.toString(\'latin1\');\n}'),
+    true],
+  ['拔掉②：extractPdf 不再收 ToUnicode（cidMap 恒 null）',
+    s => s.replace(/const tu = toUnicodeMaps\(buf\);\s*\n\s*const cidMap = tu\.map\.size \? tu\.map : null;/,
+      'const cidMap = null;'),
+    true],
+  ['拔掉③：调用点不传 cidMap（专治"只在定义处有参数"的假绿）',
+    s => s.replace(/textFromContentStream\(([^,)]+), cidMap\)/g, 'textFromContentStream($1)'),
+    true],
+  ['拔掉④：TJ 数组里的 (<hex>) 不再查映射表（退回"吐原始码"）',
+    s => s.replace(/if \(m2\) \{\s*\n\s*pending \+= decodeHexText\(m2\[1\]\.replace\(\/\\s\+\/g, ''\), cidMap\);\s*\n\s*\} else \{\s*\n\s*pending \+= un;\s*\n\s*\}/,
+      'pending += un;'),
+    true],
+];
+
+let bad = 0;
+for (const [name, mutate, wantRed] of CASES) {
+  const src = mutate ? mutate(good) : good;
+  if (mutate && src === good) {
+    console.log('  ✗ ' + name + '  → **变异没生效**（源文件和补丁对不上，等于没测）');
+    bad++; continue;
+  }
+  fs.writeFileSync(target, src, 'utf8');
+  const r = runSuite();
+  const red = r.fail !== null && r.fail > 0;
+  const crashed = r.pass === null;
+  const got = crashed ? true : red;          // 套件崩了也算"抓到了"
+  const okk = (got === wantRed);
+  if (!okk) bad++;
+  console.log((okk ? '  ✓ ' : '  ✗ ') + name + '  → 通过 ' + r.pass + ' 失败 ' + r.fail +
+    (crashed ? '（套件异常退出）' : ''));
+}
+fs.writeFileSync(target, good, 'utf8');
+console.log(bad ? '\n❌ 反证有 ' + bad + ' 项不符：套件对这些改动不敏感！'
+                : '\n✅ 反证全部符合预期：四处修复每拔掉一处，套件都变红。');
+process.exit(bad ? 1 : 0);

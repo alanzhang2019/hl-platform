@@ -39,6 +39,13 @@ async function probe(extraEnv) {
   const env = Object.assign({}, process.env, { PORT: String(port), DATA_DIR: dataDir });
   delete env.ADMIN_PASSWORD;
   delete env.LLM_API_KEY;
+  // ★★ NO_DOTENV 也必须由**本套件显式决定**，不能从外层继承。
+  //    全量回归（_run-tests.cjs）是带 NO_DOTENV=1 跑的，如果这里照抄父进程的值，
+  //    第①条「读 .env」就会带着 NO_DOTENV=1 进子进程 ⇒ 加载器**故意跳过** .env
+  //    ⇒ mockLLM 恒为 true ⇒ 明明产品是对的，却报"加载器坏了"。
+  //    这正是本套件的反面：它专守"加载器位置"这条不报错的约束，自己却先给出假红。
+  //    所以：默认清空（= 读 .env），只有 extraEnv 显式写了才用传进来的值。
+  delete env.NO_DOTENV;
   Object.assign(env, extraEnv || {});
   const child = spawn(NODE, [path.join(ROOT, 'server.js')], {
     cwd: ROOT, env: env, stdio: ['ignore', 'pipe', 'pipe'],
