@@ -5681,21 +5681,43 @@
     }
     let rec = null, on = false;
     mic.addEventListener('click', () => {
-      if (on) { rec && rec.stop(); return; }
+      // 先把 on 落成 false 再 stop()：onend 里靠它区分「用户主动结束」和
+      // 「Chrome 静默自动结束」—— 否则自动续听会把「再点一下结束」变成停不下来。
+      if (on) { on = false; rec && rec.stop(); return; }
       rec = new SR();
       rec.lang = 'zh-CN';
       rec.continuous = true;
       rec.interimResults = true;
-      let base = $('#input').value;
+      // 三段文字分开管，缺一不可：
+      //   base      = 点 mic 前输入框里已有的文字，本次识别全程不动它
+      //   finalText = 本次识别【已确认】的片段，跨 onresult 累加
+      //   interim   = 还没确认的临时结果，每次重算，只用于实时显示
+      const base = $('#input').value;
+      let finalText = '';
       rec.onstart = () => { on = true; mic.classList.add('on'); hint.textContent = '正在听…再点一下结束'; };
       rec.onresult = e => {
-        let s = '';
-        for (let i = e.resultIndex; i < e.results.length; i++) s += e.results[i][0].transcript;
-        $('#input').value = (base + s).slice(0, 2000);
+        // ⚠️ 不能把 `for (i = resultIndex …)` 拼出来的串当成「全部」：
+        //    resultIndex 只指向本次事件里【第一个变化】的结果。中间一停顿，
+        //    浏览器会把前半段标成 isFinal 并把 resultIndex 前移，从它开始拼
+        //    就会丢掉前半段 —— 表现出来就是「停顿后说的话覆盖了前面的」。
+        //    所以 isFinal 的片段必须累进 finalText（跨事件保留），
+        //    只有临时结果才每次重算。
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalText += t;
+          else interim += t;
+        }
+        $('#input').value = (base + finalText + interim).slice(0, 2000);
         autoGrow();
       };
       rec.onerror = e => { hint.textContent = '语音输入出错：' + (e.error || ''); };
-      rec.onend = () => { on = false; mic.classList.remove('on'); hint.textContent = ''; $('#input').focus(); };
+      rec.onend = () => {
+        // Chrome 即便 continuous=true，静默几秒也会 end。用户没主动结束
+        // （on 仍为 true）就自动续上，否则一停顿就「没反应了」。
+        if (on) { try { rec.start(); return; } catch (_) {} }
+        on = false; mic.classList.remove('on'); hint.textContent = ''; $('#input').focus();
+      };
       try { rec.start(); } catch (e) { toast('无法启动语音输入'); }
     });
   }
