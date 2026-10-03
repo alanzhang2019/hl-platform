@@ -533,6 +533,9 @@ const MIGRATIONS = [
   // 0 = 正常，非 0 = 被禁，登录会被拦、已有会话会被踢下线。
   ['users', 'disabled', 'INTEGER NOT NULL DEFAULT 0'],
   ['users', 'disabled_reason', "TEXT NOT NULL DEFAULT ''"],
+  // 模型的思考过程（reasoning_content）。只给前端折叠展示用，**不进模型上下文**
+  // —— 那是模型的旁白，喂回上下文只会让它自己带偏自己，还白烧 token。
+  ['messages', 'reasoning', "TEXT NOT NULL DEFAULT ''"],
 ];
 function migrate() {
   MIGRATIONS.forEach(([table, col, decl]) => {

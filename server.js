@@ -68,7 +68,7 @@ const pool = require('./server/pool');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-02-parity27';
+const APP_VERSION = '2026-10-03-parity28';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -351,6 +351,8 @@ async function streamReply(req, res, ctx, sid, opt) {
   });
 
   let full = '';
+  // 模型的思考过程（reasoning_content）。先于正文流出，前端折叠展示。
+  let reasoning = '';
   let aborted = false;
   let detached = false;                 // 前端连接没了（≠ 用户点了停止）
   req.on('close', () => { detached = true; });
@@ -359,12 +361,26 @@ async function streamReply(req, res, ctx, sid, opt) {
   const flush = (force) => {
     if (!force && sinceFlush < 240 && Date.now() - lastFlush < 400) return;
     lastFlush = Date.now(); sinceFlush = 0;
-    try { core.appendMessageContent(sid, placeholder.id, full, { status: 'streaming' }); } catch (e) {}
+    try { core.appendMessageContent(sid, placeholder.id, full, { status: 'streaming', reasoning: reasoning }); } catch (e) {}
+  };
+  // ★ 思考过程必须**单独**节流回写。上面那个 flush 的触发条件是"正文字数够多"，
+  //   而推理阶段正文一个字都还没来 —— 那个 flush 在这段时间一次都不会跑，
+  //   中途刷新页面就会看到一个空的思考过程（正文反而没事，因为它在最后会整体落库）。
+  let lastRFlush = Date.now(), sinceRFlush = 0;
+  const flushReasoning = () => {
+    if (sinceRFlush < 240 && Date.now() - lastRFlush < 400) return;
+    lastRFlush = Date.now(); sinceRFlush = 0;
+    try { core.appendMessageContent(sid, placeholder.id, full, { status: 'streaming', reasoning: reasoning }); } catch (e) {}
   };
   try {
     for await (const chunk of llm.streamChat({
       messages: [{ role: 'system', content: system }, ...hist],
       model: model,
+      onReasoning: (t) => {
+        reasoning += t; sinceRFlush += t.length;
+        if (!detached) send('reasoning', { text: t });
+        flushReasoning();
+      },
     })) {
       if (STOP_FLAGS.has(placeholder.id)) { aborted = true; break; }
       full += chunk; sinceFlush += chunk.length;
@@ -376,12 +392,13 @@ async function streamReply(req, res, ctx, sid, opt) {
   }
 
   const status = aborted ? 'aborted' : (full ? 'done' : 'error');
-  try { core.appendMessageContent(sid, placeholder.id, full, { status: status }); } catch (e) {}
+  try { core.appendMessageContent(sid, placeholder.id, full, { status: status, reasoning: reasoning }); } catch (e) {}
   STOP_FLAGS.delete(placeholder.id);
   if (!detached) {
     send('done', {
       messageId: placeholder.id, replyId: placeholder.id,
       conversationId: conv.id, length: full.length, aborted: aborted, status: status,
+      reasoningLength: reasoning.length,
     });
   }
 

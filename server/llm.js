@@ -236,7 +236,7 @@ function mockStream(messages) {
   })();
 }
 
-async function* streamChat({ messages, model }) {
+async function* streamChat({ messages, model, onReasoning }) {
   const m = resolveModel(model);
   if (MOCK) { yield* mockStream(messages); return; }
   const body = { model: m.model, messages, stream: true, temperature: 0.6 };
@@ -266,7 +266,15 @@ async function* streamChat({ messages, model }) {
       try {
         const j = JSON.parse(payload);
         const d = j.choices && j.choices[0] && j.choices[0].delta;
-        if (d && d.content) yield d.content;
+        if (!d) continue;
+        // 思考过程：DeepSeek 系模型把它放在 `reasoning_content`，与 `content` 并行流出。
+        // ★ 只旁路一份给调用方，**绝不 yield** —— 一旦 yield 出去，调用方（server.js）
+        //   会执行 `full += chunk` 把它当正文拼进回复，学生的答案里就会混进一段
+        //   模型自述（"我们需要用中文回答…"）。
+        if (d.reasoning_content && onReasoning) {
+          try { onReasoning(d.reasoning_content); } catch (e) { /* 旁路出错不能拖垮正文流 */ }
+        }
+        if (d.content) yield d.content;
       } catch (e) { /* 忽略非 JSON 行 */ }
     }
   }

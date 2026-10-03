@@ -149,6 +149,7 @@ function deleteConversation(spaceId, id) {
 function shapeMessage(m) {
   return {
     id: m.id, role: m.role, content: m.content,
+    reasoning: m.reasoning || '',
     blocks: m.blocks_json ? safeJSON(m.blocks_json) : null,
     meta: m.meta_json ? safeJSON(m.meta_json) : null,
     attachments: m.attachments_json ? safeJSON(m.attachments_json) : null,
@@ -203,6 +204,8 @@ function appendMessageContent(spaceId, messageId, content, patch) {
   D.run('UPDATE messages SET content = ? WHERE id = ?', String(content || ''), messageId);
   if (patch && patch.status) D.run('UPDATE messages SET status = ? WHERE id = ?', patch.status, messageId);
   if (patch && patch.meta) D.run('UPDATE messages SET meta_json = ? WHERE id = ?', JSON.stringify(patch.meta), messageId);
+  // 思考过程单独一列：正文会被这个函数反复覆盖，两者挤在同一列会互相冲掉。
+  if (patch && patch.reasoning !== undefined) D.run('UPDATE messages SET reasoning = ? WHERE id = ?', String(patch.reasoning || ''), messageId);
   return true;
 }
 

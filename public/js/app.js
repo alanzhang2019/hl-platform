@@ -1155,6 +1155,43 @@
   }
 
   /** 按消息对象建 DOM。msgId 为空 = 正在生成中的临时节点 */
+  // ── 思考过程（reasoning_content）─────────────────────────────────
+  // 模型在正文之前会先流出一段推理（DeepSeek 系放在 reasoning_content）。
+  // 默认折叠；正在生成时展开跟随，正文一开始就收起来 —— 学生要的是答案，
+  // 但"等待期间屏幕上有东西在动"正是治"以为没响应"的那味药。
+  //
+  // ★ 推理内容一律用 textContent 写入，**绝不用 innerHTML** ——
+  //   那是模型自由生成的文本，可能带 < > 之类的字符，拼进 HTML 会被当标签执行。
+  const THINK_SKELETON = '<div class="rsn">' +
+    '<button type="button" class="rsn-hd">' +
+    '<span class="rsn-dot"></span><span class="rsn-tt">思考过程</span>' +
+    '<span class="rsn-ar">\u25be</span>' +
+    '</button><div class="rsn-bd"></div></div>';
+
+  function thinkHTML(m) {
+    return String((m && m.reasoning) || '').trim() ? THINK_SKELETON : '';
+  }
+
+  /** 绑一次折叠开关。元素是动态插入的，所以靠 _bound 去重，别重复绑。 */
+  function bindThink(wrap) {
+    const t = wrap.querySelector('.rsn');
+    if (!t) return null;
+    const hd = t.querySelector('.rsn-hd');
+    if (hd && !hd._bound) {
+      hd._bound = true;
+      hd.addEventListener('click', () => t.classList.toggle('open'));
+    }
+    return t;
+  }
+
+  /** 取回（没有就新建）某条消息的思考过程面板；live=true 表示正在生成、展开跟随 */
+  function ensureThink(a, live) {
+    if (!a.el.querySelector('.rsn')) a.body.insertAdjacentHTML('beforebegin', THINK_SKELETON);
+    const t = bindThink(a.el);
+    if (t && live) t.classList.add('open', 'live');
+    return t;
+  }
+
   function renderMsgEl(m) {
     const role = m.role === 'user' ? 'user' : 'ai';
     const e = $('#streamEmpty'); if (e) e.remove();
@@ -1167,6 +1204,7 @@
     wrap.innerHTML = '<div class="av">' + (role === 'user' ? '我' : '涌') + '</div>' +
       '<div class="body">' +
       '<div class="meta">' + metaHTML + '</div>' +
+      thinkHTML(m) +
       msgAttachHTML(m, 'head') +
       '<div class="md"></div>' +
       msgAttachHTML(m, 'tail') +
@@ -1174,6 +1212,9 @@
       '<div class="acts"></div>' +
       '</div>';
     wrap.querySelector('.md').innerHTML = HL.render(m.content || '');
+    // 历史消息里的思考过程：回填文本，默认折叠（答案才是学生要看的）
+    const _th = bindThink(wrap);
+    if (_th) _th.querySelector('.rsn-bd').textContent = String(m.reasoning || '').trim();
     // 互动课堂附件：把"打开"按钮接到右侧面板
     const atts0 = m.attachments || [];
     wrap.querySelectorAll('[data-ivt-open]').forEach(btn => {
@@ -1412,6 +1453,8 @@
     S.streaming = true;
     setComposerBusy(true);
     let acc = '';
+    let rAcc = '';             // 思考过程（reasoning_content）累积
+    let thinkCollapsed = false;
     let replyId = '';
     let expectingArt = null;   // 服务端推了 art 事件 = 这条会有配图，画完才落库
     try {
@@ -1479,7 +1522,23 @@
               const lh = linksHTML(j.links);
               if (lh) a.el.querySelector('.acts').insertAdjacentHTML('beforebegin', lh);
             }
+          } else if (ev === 'reasoning') {
+            // 思考过程先于正文流出。展开跟随，让学生看见"它在想"。
+            rAcc += j.text || '';
+            const t = ensureThink(a, true);
+            if (t) {
+              t.querySelector('.rsn-bd').textContent = rAcc;
+              t.scrollTop = t.scrollHeight;
+            }
+            scrollBottom();
           } else if (ev === 'delta') {
+            // 正文一开始就把思考过程收起来（展开着会把答案顶到屏幕外）；
+            // 面板留在原处，学生想看随时点开。
+            if (rAcc && !thinkCollapsed) {
+              const t = a.el.querySelector('.rsn');
+              if (t) t.classList.remove('open', 'live');
+              thinkCollapsed = true;
+            }
             acc += j.text || '';
             paintSoon(a, acc);
           } else if (ev === 'attachment') {
@@ -1544,6 +1603,12 @@
       let m = null;
       try { m = (await api('/api/messages/' + replyId)).message; } catch (e) { m = null; }
       if (m && ['done', 'aborted', 'error'].indexOf(m.status) >= 0) {
+        // 断流恢复时把思考过程也补上：只补正文的话，这段刷新后就没了
+        const _rt = String(m.reasoning || '').trim();
+        if (_rt) {
+          const t = ensureThink(a, false);
+          if (t) { t.querySelector('.rsn-bd').textContent = _rt; t.classList.remove('live'); }
+        }
         if ((m.content || '').length > base.length) {
           a.data.content = m.content;
           a.body.innerHTML = HL.render(m.content);
@@ -1579,6 +1644,8 @@
     m.body.innerHTML = '<span class="skel" style="display:inline-block;width:8em"></span>';
     S.streaming = true; setComposerBusy(true);
     let acc = '';
+    let rAcc = '';
+    let thinkCollapsed = false;
     let expectingArt = null;
     try {
       abortCtl = new AbortController();
@@ -1603,7 +1670,20 @@
           if (!data) continue;
           let j; try { j = JSON.parse(data); } catch (e) { continue; }
           if (ev === 'meta') { rid = j.replyId || ''; currentReply = rid; }
-          else if (ev === 'delta') { acc += j.text || ''; paintSoon(m, acc); }
+          else if (ev === 'reasoning') {
+            rAcc += j.text || '';
+            const t = ensureThink(m, true);
+            if (t) { t.querySelector('.rsn-bd').textContent = rAcc; t.scrollTop = t.scrollHeight; }
+            scrollBottom();
+          }
+          else if (ev === 'delta') {
+            if (rAcc && !thinkCollapsed) {
+              const t = m.el.querySelector('.rsn');
+              if (t) t.classList.remove('open', 'live');
+              thinkCollapsed = true;
+            }
+            acc += j.text || ''; paintSoon(m, acc);
+          }
           else if (ev === 'attachment') { appendIllustration(m, j.attachment); }
           else if (ev === 'art') { expectingArt = j || { kind: 'svg' }; }
         }
