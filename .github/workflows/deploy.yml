@@ -1,0 +1,58 @@
+name: Deploy to production
+
+# push 到 main 即部署到 aijiangti.cn/ai。
+# 服务器上没有 CI/runner —— 由 GitHub 侧 SSH 进来执行 /home/ubuntu/deploy/dispatch.sh，
+# 它再 git reset --hard origin/main 并把控制权交给仓库里的 deploy/deploy-hl-platform.sh。
+#
+# 需要的仓库 secret（只有一个）：
+#   DEPLOY_SSH_KEY  部署专用私钥（对应服务器 authorized_keys 里那把带 command= 限制的 key）
+# 主机名、用户、主机公钥都是公开信息，直接写在下面，省得再维护三个 secret。
+#
+# 手动触发：Actions → Deploy to production → Run workflow
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # 纯文档改动不值得重启一次容器
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+# 同一时间只跑一个部署；不取消正在跑的
+concurrency:
+  group: deploy-hl-platform
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 部署到 aijiangti.cn/ai
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 准备 SSH 凭据
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_SSH_KEY" ]; then
+            echo "::error::缺少仓库 secret DEPLOY_SSH_KEY（Settings → Secrets and variables → Actions）"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # 固定服务器主机密钥。不用 ssh-keyscan —— 那等于"第一次见到就信"，挡不住中间人。
+          # 指纹：SHA256:WwuQJ8jpJcIOLJRGCgm3rD3LzG5iyq8LSbL0VfrKoLw
+          printf '%s\n' 'aijiangti.cn ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhmcRxp79pkSNiCBHFX5piILx3H2rzLgMNb9walm3po' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: 触发部署
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy \
+              -o IdentitiesOnly=yes \
+              -o BatchMode=yes \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              ubuntu@aijiangti.cn 'deploy hl-platform'
