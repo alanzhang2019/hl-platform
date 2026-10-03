@@ -1399,7 +1399,9 @@
     const id = m.data.id;
     if (a === 'copy') { copyText(m.body.innerText); return; }
     if (a === 'delete') {
-      if (!id) return;
+      // 静默 return 是上一版的坑：没有 id 时什么都不做，用户看到的就是"点了没反应"。
+      // 宁可报一声，也别让人对着按钮反复点。
+      if (!id) { toast('这条消息还没落库，刷新页面后再删'); return; }
       if (!confirm('确定删除这条消息吗？删除后将不再作为上下文发送给AI。')) return;
       try {
         await api('/api/messages/' + id, { method: 'DELETE' });
@@ -1515,41 +1517,89 @@
   }
 
   // ---------- 选中文字朗读 ----------
+  // ★ 第一版是坏的，两个原因，都记在这儿免得再踩：
+  //   1) 按钮上的 mousedown 会把文本选区清掉（按钮不是可选内容，浏览器默认
+  //      折叠选区）。紧接着 document 上的 mouseup 一跑，getSelection() 已经是空的，
+  //      于是把刚弹出来的按钮又删了 —— click 永远不会触发，表现就是"点了没反应"。
+  //      解法：按钮自己吞掉 mousedown（preventDefault 保住选区），
+  //      并且任何"看选区决定是否收起"的地方都要先跳过按钮自身。
+  //   2) 只用 mouseup 触发，触摸屏根本不派发这个事件。改用 selectionchange
+  //      （拖选 / 触摸选择 / 双击选词 / 键盘选择都会触发）防抖 150ms。
   let _selTtsBtn = null;
+  let _selTtsText = '';
+  let _selTtsTimer = null;
+
   function hideSelTts() {
     if (_selTtsBtn) { _selTtsBtn.remove(); _selTtsBtn = null; }
+    _selTtsText = '';
   }
-  function showSelTts(text, x, y) {
+  function isSelTtsNode(n) {
+    if (!_selTtsBtn || !n) return false;
+    if (n === _selTtsBtn) return true;
+    return n.nodeType === 1 && _selTtsBtn.contains(n);
+  }
+  function placeSelTts(text, rect) {
+    const x = Math.max(8, Math.min(rect.left + rect.width / 2 - 40, window.innerWidth - 108));
+    const y = Math.max(8, rect.top - 42);
+    // 同一段文字只是位置变了 → 原地挪，不重建（重建会闪，也没必要）
+    if (_selTtsBtn && _selTtsText === text) {
+      _selTtsBtn.style.left = x + 'px';
+      _selTtsBtn.style.top = y + 'px';
+      return;
+    }
     hideSelTts();
     const b = document.createElement('button');
-    b.className = 'btn sm pri sel-tts-btn';
+    b.type = 'button';
+    b.className = 'btn sm primary sel-tts-btn';
     b.textContent = '朗读选中';
-    b.style.cssText = 'position:fixed;z-index:40;left:' + x + 'px;top:' + y + 'px;box-shadow:0 4px 12px rgba(0,0,0,.15);pointer-events:auto;';
+    b.style.cssText = 'position:fixed;z-index:60;left:' + x + 'px;top:' + y + 'px;box-shadow:0 4px 12px rgba(0,0,0,.18);';
+    // 关键：不让按钮抢焦点、不让它清掉选区（清掉就等于把自己删了，见上面注释）
+    b.addEventListener('mousedown', function (ev) { ev.preventDefault(); ev.stopPropagation(); });
     b.addEventListener('click', function (ev) {
+      ev.preventDefault();
       ev.stopPropagation();
-      speakText(null, text, null);
+      const t = _selTtsText || text;
       hideSelTts();
+      if (t) speakText(null, t, null);
     });
     document.body.appendChild(b);
     _selTtsBtn = b;
+    _selTtsText = text;
   }
-  // 在消息列表上监听选中文本
-  document.addEventListener('mouseup', function (ev) {
+  function maybeShowSelTts() {
     const sel = window.getSelection();
-    const txt = sel ? String(sel.toString() || '').trim() : '';
-    if (!txt || txt.length < 2) { hideSelTts(); return; }
-    // 只有选区落在消息正文里才显示朗读按钮
-    const anchor = sel.anchorNode;
-    if (!anchor) { hideSelTts(); return; }
-    const inMsg = anchor.parentElement && anchor.parentElement.closest('.msg .md');
-    if (!inMsg) { hideSelTts(); return; }
-    const rect = sel.getRangeAt(0).getBoundingClientRect();
-    showSelTts(txt, rect.left + rect.width / 2 - 36, rect.top - 38);
+    if (!sel || !sel.rangeCount) { hideSelTts(); return; }
+    const txt = String(sel.toString() || '').trim();
+    if (txt.length < 2) { hideSelTts(); return; }
+    // 只在某条消息的正文（.md）里弹 —— 侧栏标题、按钮上的文字被选中时不该打扰
+    const a = sel.anchorNode;
+    const el = a && (a.nodeType === 1 ? a : a.parentElement);
+    if (!el || !el.closest || !el.closest('.msg') || !el.closest('.md')) { hideSelTts(); return; }
+    let rect = null;
+    try { rect = sel.getRangeAt(0).getBoundingClientRect(); } catch (e) { rect = null; }
+    if (!rect || (!rect.width && !rect.height)) { hideSelTts(); return; }
+    placeSelTts(txt, rect);
+  }
+
+  document.addEventListener('selectionchange', function () {
+    if (_selTtsTimer) clearTimeout(_selTtsTimer);
+    _selTtsTimer = setTimeout(maybeShowSelTts, 150);
   });
-  // 点空白处收起朗读按钮
+  // mouseup 补一发，让鼠标用户感觉是"松手就出来"，不用等防抖
+  document.addEventListener('mouseup', function (ev) {
+    if (isSelTtsNode(ev.target)) return;
+    if (_selTtsTimer) clearTimeout(_selTtsTimer);
+    maybeShowSelTts();
+  });
+  // 点别处收起。点按钮自己除外 —— 那要留给 click 处理，先收起就等于点了没反应。
   document.addEventListener('mousedown', function (ev) {
-    if (_selTtsBtn && !_selTtsBtn.contains(ev.target)) hideSelTts();
+    if (isSelTtsNode(ev.target)) return;
+    if (!_selTtsBtn) return;
+    const el = ev.target && (ev.target.nodeType === 1 ? ev.target : ev.target.parentElement);
+    if (!el || !el.closest || !el.closest('.msg')) hideSelTts();
   });
+  // 滚动时按钮是 fixed 定位，会脱离它指向的文字 → 直接收起，别留个指错地方的按钮
+  window.addEventListener('scroll', hideSelTts, true);
 
   // ---------- 发送（SSE 流式 + 断流恢复）----------
   let streamPaint = 0;
@@ -1644,6 +1694,11 @@
             S.convId = j.conversationId;
             S.pendingProjectId = null;   // 会话已带着项目建好，待归入意图用完即清
             if (isNewConv) loadSide();
+            // ★ 把自己这条消息的 id 认领回来。以前这里只接 replyId，用户消息从头到尾
+            //   没有 id → 点「删除消息」时 msgAction 的 `if (!id) return` 直接静默返回，
+            //   表现就是「只能删 AI 的，删不掉我自己的」。服务端一直在 meta 里回
+            //   messageId，只是前端没人读。
+            if (j.messageId && !u.data.id) { u.data.id = j.messageId; u.el.dataset.mid = j.messageId; }
             replyId = j.replyId || '';
             currentReply = replyId;
             a.data.id = replyId;

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>选中朗读机制复现</title>
+<style>
+  body { font: 15px/1.7 system-ui, sans-serif; margin: 24px; }
+  #log { margin-top: 16px; padding: 10px; background: #f4f4f6; border-radius: 8px; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  .msg .md { border: 1px solid #ddd; border-radius: 8px; padding: 12px; max-width: 520px; }
+  .ttsbtn { position: fixed; z-index: 60; padding: 6px 12px; border-radius: 8px; background: #2563EB; color: #fff; border: 0; cursor: pointer; }
+  #verdict { margin-top: 12px; font-weight: 700; }
+</style>
+</head>
+<body>
+<h3>选中朗读 · 机制复现</h3>
+<p>用鼠标在下面这段文字里拖选几个字，然后点弹出的「朗读选中」按钮。</p>
+
+<div class="msg ai"><div class="body">
+  <div class="md"><p>这是一段可以被选中的文字，用来验证选中朗读按钮的行为是否正常。</p></div>
+</div></div>
+
+<div id="verdict">等待操作…</div>
+<div id="log"></div>
+
+<script>
+var LOG = [];
+function log(s) { LOG.push(s); document.getElementById('log').textContent = LOG.join('\n'); }
+function verdict(s) { document.getElementById('verdict').textContent = s; }
+
+var _btn = null, _text = '';
+function hide() { if (_btn) { _btn.remove(); _btn = null; log('  → 按钮已移除'); } }
+function isTarget(n) { return !!(_btn && n && (n === _btn || _btn.contains(n))); }
+
+// 参数化：mode = 'buggy' | 'fixed'
+var MODE = new URLSearchParams(location.search).get('mode') || 'buggy';
+
+function show(text, x, y) {
+  hide();
+  var b = document.createElement('button');
+  b.className = 'ttsbtn';
+  b.textContent = '朗读选中';
+  b.style.left = x + 'px'; b.style.top = y + 'px';
+  b.id = 'ttsBtn';
+
+  if (MODE === 'fixed') {
+    // 修复：吞掉 mousedown，避免按钮抢焦点/清空选区
+    b.addEventListener('mousedown', function (ev) { ev.preventDefault(); ev.stopPropagation(); log('按钮 mousedown → preventDefault（保住选区）'); });
+  }
+  b.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    log('★ 按钮 click 触发了！朗读文本 = "' + (_text || text) + '"');
+    verdict('PASS：按钮点击生效');
+    hide();
+  });
+  document.body.appendChild(b);
+  _btn = b; _text = text;
+  log('  → 按钮已创建并插入 body');
+}
+
+function maybeShow() {
+  var sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) { log('mouseup：无选区'); hide(); return; }
+  var txt = String(sel.toString() || '').trim();
+  if (txt.length < 2) { log('mouseup：选区为空或太短（"' + txt + '"）'); hide(); return; }
+  var anchor = sel.anchorNode;
+  var el = anchor && (anchor.nodeType === 1 ? anchor : anchor.parentElement);
+  if (!el || !el.closest('.msg') || !el.closest('.md')) { log('mouseup：选区不在消息正文里'); hide(); return; }
+  var rect = null;
+  try { rect = sel.getRangeAt(0).getBoundingClientRect(); } catch (e) {}
+  if (!rect || (!rect.width && !rect.height)) { log('mouseup：拿不到选区矩形'); hide(); return; }
+  log('mouseup：选区 = "' + txt + '" → 弹出按钮');
+  show(txt, rect.left + rect.width / 2 - 36, rect.top - 40);
+}
+
+document.addEventListener('mouseup', function (ev) {
+  log('document mouseup，target = ' + (ev.target.tagName || ev.target.nodeName) + (ev.target.id ? '#' + ev.target.id : ''));
+  if (MODE === 'fixed' && isTarget(ev.target)) { log('  目标就是朗读按钮 → 跳过（不删自己）'); return; }
+  maybeShow();
+});
+document.addEventListener('mousedown', function (ev) {
+  log('document mousedown，target = ' + (ev.target.tagName || ev.target.nodeName) + (ev.target.id ? '#' + ev.target.id : ''));
+  if (MODE === 'fixed' && isTarget(ev.target)) { log('  目标就是朗读按钮 → 跳过'); return; }
+  if (_btn) {
+    var el = ev.target && (ev.target.nodeType === 1 ? ev.target : ev.target.parentElement);
+    if (!el || !el.closest('.msg')) hide();
+  }
+});
+window.__setVerdict = verdict;
+window.__mode = MODE;
+</script>
+</body>
+</html>

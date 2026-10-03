@@ -763,6 +763,65 @@ async function ttsSlotTests() {
 }
 
 // ============================================================
+// 七、图表优先模式 + 聊天窗口两个修复（2026-10-03 第二批）
+//
+// 这两个 bug 都是"点了没反应"型 —— 前端静默失败，服务端一切正常，
+// 所以只测接口是测不出来的。这里分两层：
+//   · 服务端：图表模式的提示词到底有没有注入、措辞指的方向对不对
+//   · 前端源码：关键代码还在不在（有专门的浏览器脚本 test/_delmsg-e2e.mjs
+//     和 test/_seltts-live.mjs 做真实点击验证，这里只是廉价的结构护栏）
+// ============================================================
+async function visualizeTests() {
+  group('七、图表优先模式与聊天窗口修复');
+
+  const appjs = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+
+  await t('未开图表模式时，提示词里不含【图表优先模式】', async function () {
+    const p = llm.buildSystemPrompt({ mode: 'guided' });
+    assert.ok(p.indexOf('【图表优先模式】') < 0, '默认不该注入图表规则');
+  });
+
+  await t('开启图表模式后注入 VISUALIZE_RULES，且排在画图协议之前', async function () {
+    const p = llm.buildSystemPrompt({ mode: 'guided', visualize: true });
+    assert.ok(p.indexOf('【图表优先模式】') >= 0, '应注入图表优先模式');
+    assert.ok(p.indexOf('先画图再讲解') >= 0, '应要求先画图');
+    const iViz = p.indexOf('【图表优先模式】');
+    const iArt = p.indexOf('【关于"画图"】');
+    assert.ok(iViz >= 0 && iArt >= 0 && iViz < iArt, '图表规则必须在画图协议之前');
+  });
+
+  await t('图表规则的引用方向指向下方（协议在后，别写成"上面"）', async function () {
+    assert.ok(llm.VISUALIZE_RULES.indexOf('见**下面**的【关于"画图"】协议') >= 0,
+      'VISUALIZE_RULES 要指向下方；写成"上面"会把模型指到不存在的位置');
+  });
+
+  await t('图表模式保留"确实不适合画图时可以只用文字"的出口', async function () {
+    const p = llm.buildSystemPrompt({ visualize: true });
+    assert.ok(/不适合画图/.test(p), '要有出口，否则纯情感类提问会被硬塞一张图');
+  });
+
+  await t('用户消息要认领服务端回传的 messageId（否则删不掉自己的消息）', async function () {
+    assert.ok(appjs.indexOf('if (j.messageId && !u.data.id) { u.data.id = j.messageId;') >= 0,
+      'meta 事件里必须把 messageId 记到用户消息上；漏了就会「只能删 AI 的，删不掉自己的」');
+  });
+
+  await t('删除消息缺 id 时不许静默 return（要点出提示）', async function () {
+    assert.ok(appjs.indexOf("if (!id) { toast('这条消息还没落库，刷新页面后再删'); return; }") >= 0,
+      '静默 return 就是"点了没反应"的成因，必须给用户一个反馈');
+  });
+
+  await t('选中朗读：按钮要吞掉 mousedown（否则选区被清空、按钮自删）', async function () {
+    assert.ok(appjs.indexOf("b.addEventListener('mousedown', function (ev) { ev.preventDefault(); ev.stopPropagation(); });") >= 0,
+      '按钮上的 mousedown 必须 preventDefault，否则浏览器清空选区 → 按钮被自己删掉 → click 永不触发');
+    assert.ok(appjs.indexOf('function isSelTtsNode(n)') >= 0, '需要有 isSelTtsNode 来跳过按钮自身');
+    assert.ok(appjs.indexOf("document.addEventListener('selectionchange'") >= 0,
+      '触发源要用 selectionchange（触摸屏不派发 mouseup）');
+    assert.ok(appjs.indexOf("b.className = 'btn sm primary sel-tts-btn';") >= 0,
+      '类名必须是 .btn.primary —— CSS 里没有 .btn.pri');
+  });
+}
+
+// ============================================================
 (async function main() {
   console.log('临时数据目录：' + TMP);
   try {
@@ -772,6 +831,7 @@ async function ttsSlotTests() {
     await modelTests();
     await reasonTests();
     await ttsSlotTests();
+    await visualizeTests();
   } catch (e) {
     console.error('\n测试运行器本身出错：', e);
     fail++;
