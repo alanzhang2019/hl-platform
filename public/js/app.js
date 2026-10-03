@@ -550,6 +550,63 @@
     if (box) box.innerHTML = adminUsersHTML(r.users || []);
   }
 
+  // ---------- 管理端：空间列表（档位 + 口令）----------
+  // 这三份状态要提到函数外：改口令 / 改档位之后要重绘列表，
+  // 而事件处理在 initAdminPanel() 里，跟 openAdmin() 不是同一个作用域。
+  let adminTierMap = {};                              // 空间 id → 档位 key
+  let adminTiers = [];                                // 档位阶梯（含 rank / name / note）
+  let adminCoverage = { byTier: {}, total: 0 };       // 每条技能要求哪一档的计数
+  let adminSpacesCache = [];                          // 最近一次拉到的空间列表
+
+  function adminTierOpts(cur) {
+    return adminTiers.map(t =>
+      '<option value="' + t.key + '"' + (t.key === cur ? ' selected' : '') + '>' + HL.esc(t.name) + '</option>').join('');
+  }
+  /**
+   * 本档"实际可用条数" = 所有 rank ≤ 本档的 required_tier 计数之和。
+   * ★ 为什么要在管理端直接写出来：档位只体现在学生侧的「能力」分区，
+   *   管理员改完档回到对话里看不出任何区别，很容易以为"改了没生效"。
+   *   把 N/57 摆在旁边，改档的后果当场可见。
+   */
+  function adminTierAvail(key) {
+    const me = adminTiers.filter(t => t.key === key)[0];
+    if (!me || typeof me.rank !== 'number') return 0;
+    const by = adminCoverage.byTier || {};
+    return adminTiers.filter(t => t.rank <= me.rank).reduce((n, t) => n + (by[t.key] || 0), 0);
+  }
+  function adminSpacesHTML(spaces) {
+    if (!spaces || !spaces.length) return '<p class="dim">还没有空间</p>';
+    return spaces.map(s => {
+      const cur = adminTierMap[s.spaceId] || 'self';
+      const curName = (adminTiers.filter(t => t.key === cur)[0] || {}).name || cur;
+      return '<div class="row-card" style="margin-bottom:8px"><div><b>' + HL.esc(s.name) + '</b>' +
+        (s.dupName ? ' <span class="chip almost">重名</span>' : '') +
+        '<div class="dim">ID：' + HL.esc(s.spaceId) + ' · 对话 ' + s.conversations + ' · 知识卡 ' + s.cards + ' · ' +
+        (s.hasPasscode ? '有口令' : '<b class="adm-nopw">无口令（凭 ID 即可进入）</b>') + '</div>' +
+        '<div class="dim">档位「' + HL.esc(curName) + '」· 本档可用 <b>' +
+        adminTierAvail(cur) + '/' + (adminCoverage.total || 0) + '</b> 条方法</div></div>' +
+        '<div class="card-bar adm-sp-ops" style="margin:0">' +
+        '<button class="btn sm" data-adm="pass" data-sid="' + HL.esc(s.spaceId) + '" data-haspw="' + (s.hasPasscode ? '1' : '0') + '" type="button">' +
+        (s.hasPasscode ? '重置口令' : '设置口令') + '</button>' +
+        '<select class="adm-tier" data-space="' + HL.esc(s.spaceId) + '" data-prev="' + HL.esc(cur) + '" title="能力档位">' +
+        adminTierOpts(cur) + '</select></div></div>';
+    }).join('');
+  }
+  /** 重绘空间列表。改口令/改档位后调用 —— 不然行里的"有口令/无口令""档位"会停在旧值。 */
+  async function reloadAdminSpaces() {
+    const [list, tiers] = await Promise.all([
+      adminApi('/api/admin/spaces').then(x => x.json()),
+      adminApi('/api/admin/skill-tiers').then(x => x.json()),
+    ]);
+    adminTierMap = {};
+    (tiers.spaces || []).forEach(s => { adminTierMap[s.id] = s.tier; });
+    adminTiers = tiers.tiers || [];
+    adminCoverage = tiers.coverage || { byTier: {}, total: 0 };
+    adminSpacesCache = list.spaces || [];
+    const box = $('#admSpaces');
+    if (box) box.innerHTML = adminSpacesHTML(adminSpacesCache);
+  }
+
   async function openAdmin() {
     const pw = prompt('请输入管理密码');
     if (pw == null) return;
@@ -571,19 +628,13 @@
 
     // 能力档位：空间 → 档位 的映射（批次25）。管理端给某个空间定档，
     // 学生侧「能力」分区只显示 ≤ 该档位的方法。**不是付费等级，是授权。**
-    const tierMap = {};
-    (tiers.spaces || []).forEach(s => { tierMap[s.id] = s.tier; });
-    const TIERS = tiers.tiers || [];
-    const tierOpts = (cur) => TIERS.map(t =>
-      '<option value="' + t.key + '"' + (t.key === cur ? ' selected' : '') + '>' + HL.esc(t.name) + '</option>').join('');
-
-    const spRows = (list.spaces || []).map(s =>
-      '<div class="row-card" style="margin-bottom:8px"><div><b>' + HL.esc(s.name) + '</b>' +
-      (s.dupName ? ' <span class="chip almost">重名</span>' : '') +
-      '<div class="dim">ID：' + HL.esc(s.spaceId) + ' · 对话 ' + s.conversations + ' · 知识卡 ' + s.cards +
-      ' · ' + (s.hasPasscode ? '有口令' : '无口令') + '</div></div>' +
-      '<select class="adm-tier" data-space="' + HL.esc(s.spaceId) + '" data-prev="' + HL.esc(tierMap[s.spaceId] || 'self') + '" title="能力档位">' +
-      tierOpts(tierMap[s.spaceId] || 'self') + '</select></div>').join('');
+    adminTierMap = {};
+    (tiers.spaces || []).forEach(s => { adminTierMap[s.id] = s.tier; });
+    adminTiers = tiers.tiers || [];
+    adminCoverage = tiers.coverage || { byTier: {}, total: 0 };
+    adminSpacesCache = list.spaces || [];
+    const TIERS = adminTiers;
+    const spRows = adminSpacesHTML(adminSpacesCache);
 
     openModal('管理后台', [
       '<div class="adm-tabs">' +
@@ -594,9 +645,14 @@
       '<div id="admSpaces" hidden>' + (spRows || '<p class="dim">还没有空间</p>') + '</div>',
       '<p class="dim" style="margin-top:10px">停用会立刻让他下线并无法登录；这里不提供删号 —— ' +
       '学生的对话与错题是家长的资产，删掉不可逆。</p>',
-      '<p class="dim" style="margin-top:6px">右边的下拉是**能力档位**：' +
+      '<p class="dim" style="margin-top:6px">下拉是**能力档位**：' +
       TIERS.map(t => HL.esc(t.name) + '（' + HL.esc(t.note) + '）').join(' · ') +
-      '。改变后该空间立刻生效，已启用的越档能力会同时失效。</p>',
+      '。改档立刻生效，已启用的越档能力会同时失效。</p>',
+      '<p class="dim" style="margin-top:6px">⚠️ 档位只管「能力」分区里**哪些方法能被启用**，' +
+      '它不改变 AI 的讲法、也不会自动开启任何方法 —— 改完要学生自己去能力页把方法打开。</p>',
+      '<p class="dim" style="margin-top:6px">「设置/重置口令」：口令在库里是**哈希**，取不回来；' +
+      '重置会生成一个新的（或你指定的），重置后**用旧口令进来的会话会立刻掉线**。' +
+      '口令留空即该空间恢复公开 —— 请谨慎。</p>',
     ].join(''));
   }
 
@@ -614,8 +670,13 @@
         }).then(x => x.json());
         if (r.error) { toast(r.message || '改档失败'); if (prev) sel.value = prev; return; }
         sel.setAttribute('data-prev', tier);
+        adminTierMap[sid] = tier;
         const nm = (r.tiers || []).filter(t => t.key === tier)[0];
-        toast('已把该空间的能力档位改为「' + (nm ? nm.name : tier) + '」');
+        toast('已把该空间的能力档位改为「' + (nm ? nm.name : tier) + '」—— 本档可用 ' +
+          adminTierAvail(tier) + '/' + (adminCoverage.total || 0) + ' 条方法');
+        // 重绘一次：行里的"档位「X」· 本档可用 N/57"要跟着变。
+        // 不重绘的话管理员只能从 toast 里知道结果，列表上还是旧数字。
+        await reloadAdminSpaces();
       } catch (err) { toast('改档失败'); if (prev) sel.value = prev; }
     });
     document.addEventListener('click', async (e) => {
@@ -636,6 +697,43 @@
       const uid = btn.dataset.uid;
       const act = btn.dataset.adm;
       try {
+        // —— 空间：设置 / 重置访问口令（2026-10-03）——
+        // 口令在库里是哈希，**取不回来**，所以只有"给一个新的"这一条路。
+        if (act === 'pass') {
+          const sid = btn.dataset.sid;
+          const has = btn.dataset.haspw === '1';
+          const auto = confirm(
+            (has ? '重置' : '设置') + '空间「' + sid + '」的访问口令\n\n' +
+            '【确定】自动生成一个 8 位随机口令\n' +
+            '【取消】自己输入一个（输入留空 = 清空口令，该空间恢复公开）'
+          );
+          let body;
+          if (auto) {
+            body = {};                                   // 不带 passcode → 服务端生成
+          } else {
+            const np = prompt('输入新口令（至少 4 位；留空 = 清空口令，空间将恢复公开）', '');
+            if (np == null) return;                      // 用户取消 —— 别把 null 当成"清空"
+            const v = String(np).trim();
+            if (v && v.length < 4) { toast('口令至少 4 位'); return; }
+            body = { passcode: v };
+          }
+          const j = await adminApi('/api/admin/spaces/' + encodeURIComponent(sid) + '/passcode', {
+            method: 'POST', body: JSON.stringify(body),
+          }).then(x => x.json());
+          if (!j.ok) throw new Error(j.message || '改口令失败');
+          if (j.hasPasscode) {
+            // 明文只有这一刻拿得到（库里存的是哈希）。用 prompt 顶出来是为了能复制 ——
+            // toast 几秒就没了，管理员还没来得及抄。
+            prompt('空间「' + sid + '」的新口令\n\n（这个框只是给你复制用的，点"确定"即可；' +
+              '库里存的是哈希，关掉之后再也查不到）\n\n' +
+              (j.kicked ? '已让 ' + j.kicked + ' 个用旧口令进来的会话掉线。' : ''),
+              j.passcode);
+          } else {
+            toast('已清空口令 —— 该空间现在凭 ID 即可进入');
+          }
+          await reloadAdminSpaces();
+          return;
+        }
         if (act === 'disable') {
           const why = prompt('停用原因（会显示给他看，可留空）', '');
           if (why == null) return;
@@ -5380,12 +5478,20 @@
       });
     }
 
-    // —— 空间 / 主题 / 字号 / 退出 ——
+    // —— 空间 / 口令 / 主题 / 字号 / 退出 ——
     $('#setList').innerHTML =
       '<div class="row-card"><div><b>' + HL.esc(sp.name || '') + '</b>' +
       '<div class="dim">空间 ID：' + HL.esc(sp.id || '') + ' · ' + (pr ? '账号：' + HL.esc(pr.name || pr.username || '') : '空间口令登录') + '</div></div>' +
       '<button class="btn sm" id="copySpace" type="button">复制 ID</button>' +
       '<button class="btn sm" id="switchSpace2" type="button">切换空间</button></div>' +
+      // 空间口令（2026-10-03）：库里存的是哈希，**取不回来**，所以这里只回答
+      // "有没有"，外加一个设/改入口 —— 而不是把口令显示出来（那等于人人可查）。
+      '<div class="row-card"><div><b>空间口令</b><div class="dim">' +
+      (sp.hasPasscode
+        ? '已设置 —— 别人要用「空间口令」入口进来，必须知道它'
+        : '⚠️ 未设置 —— 任何人猜到空间 ID 就能直接进来') +
+      '</div></div>' +
+      '<button class="btn sm" id="setSpacePw" type="button">' + (sp.hasPasscode ? '修改口令' : '设置口令') + '</button></div>' +
       '<div class="row-card"><div><b>主题</b><div class="dim">浅色 / 深色</div></div>' +
       '<div class="seg" id="themeSeg"><button data-theme="light" type="button">浅色</button><button data-theme="dark" type="button">深色</button></div></div>' +
       '<div class="row-card"><div><b>字号</b><div class="dim">按学段选，孩子看得舒服</div></div>' +
@@ -5398,6 +5504,33 @@
     $('#copySpace').addEventListener('click', () => copyText(sp.id || ''));
     $('#switchSpace2').addEventListener('click', () => signOut());
     $('#signOut').addEventListener('click', () => signOut());
+    const pwBtn = $('#setSpacePw');
+    if (pwBtn) pwBtn.addEventListener('click', async () => {
+      // 空间口令登录进来的必须先报出**当前口令**：会话令牌可能被人捡到，
+      // 不验旧口令的话，谁拿到令牌谁就能把空间改成自己的。账号登录的不验
+      // （账号是更强的凭据，而且手机验证码注册的人根本不知道那个自动生成的口令）。
+      let oldPasscode = '';
+      if (!pr && sp.hasPasscode) {
+        const old = prompt('请输入当前的空间口令');
+        if (old == null) return;
+        oldPasscode = String(old).trim();
+      }
+      const np = prompt('设置新的空间口令（至少 4 位）\n\n设置后，用旧口令进来的其他设备会立刻掉线。');
+      if (np == null) return;
+      const v = String(np).trim();
+      if (v.length < 4) { toast('口令至少 4 位'); return; }
+      try {
+        // noSignOut：旧口令输错时后端返 401，而 api() 默认遇 401 就登出 ——
+        // 那样"输错一次旧口令"会把人直接踢下线，太粗暴。
+        await api('/api/space/passcode', {
+          method: 'POST', noSignOut: true,
+          body: { oldPasscode: oldPasscode, newPasscode: v },
+        });
+        if (S.me && S.me.space) S.me.space.hasPasscode = true;
+        toast('空间口令已更新');
+        renderSettings();
+      } catch (e) { toast(e.message || '改口令失败'); }
+    });
   }
 
   function bindProfile() {

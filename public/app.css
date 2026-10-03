@@ -655,6 +655,10 @@ button { cursor: pointer; }
   background: var(--panel); color: var(--fg); cursor: pointer;
 }
 
+/* 空间行的操作区（改口令 + 档位下拉）。窄屏换行，不要挤成一条。 */
+.adm-sp-ops { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; flex-wrap: wrap; }
+/* "无口令"是个真问题，不能跟"有口令"一样是灰字 —— 那正是本次要修的东西。 */
+.adm-nopw { color: var(--bad); font-weight: 600; }
 .adm-user {
   display: block; margin-bottom: 10px; align-items: unset;
   border-left: 3px solid var(--line);

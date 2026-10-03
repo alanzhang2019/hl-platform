@@ -143,7 +143,12 @@ function loginBySms({ phone, code, consents, name, stage, grade }) {
 
 function registerByPhone({ phone, name, stage, grade }) {
   const ph = normPhone(phone);
-  const sid = auth.createSpace({ name: name || ('学习者' + ph.slice(-4)), passcode: '' }).spaceId;
+  // ★ 手机验证码注册**没有密码可复用**，所以生成一个随机口令（2026-10-03）。
+  //   不生成的话，这个空间就是"无口令"状态，而空间 ID 是连号的（0001、0002…）——
+  //   等于用户刚注册完，空间就挂在公网上任人枚举进入。
+  //   口令不回传给前端（他继续用手机号登录即可），需要时可在「个人中心」重设，
+  //   或由管理员在后台重置。
+  const sid = auth.createSpace({ name: name || ('学习者' + ph.slice(-4)), passcode: auth.randomPasscode() }).spaceId;
   const uid = D.uid('u_');
   D.run(`INSERT INTO users(id,space_id,username,phone,password_hash,name,stage,grade,role,created_at,last_login_at)
          VALUES(?,?,?,?,?,?,?,?,?,?,?)`,

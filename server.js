@@ -68,7 +68,7 @@ const pool = require('./server/pool');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-03-parity29';
+const APP_VERSION = '2026-10-03-parity30';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -667,6 +667,27 @@ async function handleApi(req, res, u) {
     try { return sendJSON(res, 200, { ok: true, space: skills.setSpaceTier(sid, b.tier), tiers: skills.TIERS }); }
     catch (e) { return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { error: e.code || 'BAD_INPUT', message: e.message }); }
   }
+
+  // 管理员重置空间口令（2026-10-03 新增）。
+  // 为什么必须让管理员能做：口令在库里是 scrypt 哈希，**取不回来** —— 忘了只能给一个新的。
+  // 语义：
+  //   · 请求体不带 passcode 字段 → 自动生成一个 8 位随机口令（最常见的用法：用户忘了）
+  //   · passcode 传空串        → **清空**口令，该空间恢复"凭 ID 即可进入"的开放状态
+  //   · 传了具体值            → 用这个值
+  // 返回里带明文 passcode，供管理员转达用户（与 adminResetPassword 同一口径）。
+  const admPwM = p.match(/^\/api\/admin\/spaces\/([^/]+)\/passcode$/);
+  if (admPwM && method === 'POST') {
+    if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });
+    if (!ADMIN_TOKENS.has(reqToken(req))) return sendJSON(res, 401, { error: 'NO_AUTH' });
+    const psid = decodeURIComponent(admPwM[1]);
+    const b = await readBody(req);
+    try {
+      const want = (b.passcode === undefined || b.passcode === null) ? auth.randomPasscode() : b.passcode;
+      return sendJSON(res, 200, { ok: true, ...auth.setSpacePasscode(psid, want) });
+    } catch (e) {
+      return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
+  }
   // 管理员查看所有空间的档位（管理面板用）
   if (p === '/api/admin/skill-tiers' && method === 'GET') {
     if (!ADMIN_PASSWORD) return sendJSON(res, 403, { error: 'ADMIN_DISABLED' });
@@ -674,7 +695,10 @@ async function handleApi(req, res, u) {
     const spaces = auth.listSpaces().map(s => ({
       id: s.spaceId, name: s.name, tier: skills.spaceTier(s.spaceId),
     }));
-    return sendJSON(res, 200, { ok: true, tiers: skills.TIERS, spaces: spaces });
+    // coverage：每条技能要求哪一档的计数。管理端拿它算"本档可用 N/57"——
+    // 档位只体现在学生侧的「能力」分区，不把这个数字摆出来，管理员改完档
+    // 回到对话里看不出任何区别，会以为"改了没生效"。
+    return sendJSON(res, 200, { ok: true, tiers: skills.TIERS, spaces: spaces, coverage: skills.tierCoverage() });
   }
 
   // ---------- 以下都需要登录 ----------
@@ -686,7 +710,9 @@ async function handleApi(req, res, u) {
     const sp = auth.getSpace(sid);
     return sendJSON(res, 200, {
       ok: true,
-      space: { id: sid, name: sp ? sp.name : sid, tier: sp ? sp.tier : 'free' },
+      // hasPasscode：个人中心要据此显示「已设置 / 未设置」并给对应的按钮文案。
+      // 口令本身（哈希）不出后端 —— 谁都取不回来，只有重置这一条路。
+      space: { id: sid, name: sp ? sp.name : sid, tier: sp ? sp.tier : 'self', hasPasscode: !!(sp && sp.passcode) },
       profile: ctx.userId ? auth.profile(ctx.userId) : null,
       kind: ctx.kind,
       stats: core.stats(sid),
@@ -704,6 +730,28 @@ async function handleApi(req, res, u) {
     const b = await readBody(req);
     try { return sendJSON(res, 200, { ok: true, ...auth.changePassword(ctx.userId, b) }); }
     catch (e) { return sendJSON(res, e.code === 'BAD_CRED' ? 401 : 400, { error: e.code, message: e.message }); }
+  }
+
+  // 改空间口令（自助）。2026-10-03 新增。
+  // 为什么两种会话的校验不一样：
+  //   · kind='space'（凭口令进来的）→ **必须报出当前口令**。会话令牌可能被人捡到，
+  //     不验旧口令的话，谁拿到令牌谁就能把口令换掉、把空间据为己有。
+  //   · kind='account'（账号登录）→ 不验。账号是更强的凭据；而且手机验证码注册的用户
+  //     本来就不可能知道那个自动生成的口令，要求他报旧口令等于永久锁死。
+  // 改完把"用旧口令进来的"会话踢掉（exceptToken 排除操作者自己），否则重置只是纸面上的。
+  if (p === '/api/space/passcode' && method === 'POST') {
+    const b = await readBody(req);
+    const sp = auth.getSpace(sid);
+    if (!sp) return sendJSON(res, 404, { error: 'NOT_FOUND', message: '空间不存在' });
+    if (ctx.kind === 'space' && sp.passcode && !auth.passcodeMatches(sp.passcode, b.oldPasscode)) {
+      return sendJSON(res, 401, { error: 'WRONG_PASSCODE', message: '当前口令不正确' });
+    }
+    try {
+      const r = auth.setSpacePasscode(sid, b.newPasscode, { exceptToken: ctx.token });
+      return sendJSON(res, 200, { ok: true, hasPasscode: r.hasPasscode, kicked: r.kicked });
+    } catch (e) {
+      return sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
   }
 
   // ---------- 学习会话心跳（真实学习时长的唯一来源）----------
@@ -1608,6 +1656,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 auth.ensureDefaultSpace();
+// 空间口令：把 2026-10-03 之前存的**明文**口令换成 scrypt 哈希（幂等，已哈希的跳过）。
+// 必须在监听之前做 —— enterSpace 现在按哈希比对，不迁移的话老空间会全部进不去。
+const _pwMigrated = auth.migratePasscodes();
+if (_pwMigrated) console.log('[口令] 已把 ' + _pwMigrated + ' 个空间的口令迁移为哈希存储');
 skills.migrateTiers();   // 把旧的 required_tier='free' 归一到现行最低档（批次25 换过档位名）
 skills.seed();   // 技能注册表是代码里的常量，每次启动同步进库（幂等）
 chat.startWorker();   // AI 配图 / 互动课堂等异步任务的调度器（定时器已 unref，不拦测试退出）
