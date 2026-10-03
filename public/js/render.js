@@ -68,6 +68,9 @@
         if (stop && c === stop) return out;
         if (c === '\\') {
           const m = /^\\([a-zA-Z]+|.)/.exec(s.slice(i));
+          // 尾反斜杠（如 $n^2m\ ）会让 exec 返回 null —— 原来是直接 m[1] 抛错，
+          // 整条消息就渲染不出来了。按字面量输出，别让一个符号毁掉整段。
+          if (!m) { out += esc(c); i++; continue; }
           const cmd = m[1];
           i += m[0].length;
           if (cmd === 'frac' || cmd === 'dfrac' || cmd === 'tfrac') {
@@ -78,6 +81,9 @@
             if (s[i] === '[') { const j = s.indexOf(']', i); idx = s.slice(i + 1, j); i = j + 1; }
             const a = readArg();
             out += '<span class="sqrt">' + (idx ? '<sup>' + parse2(idx) + '</sup>' : '') + '√<span class="rad">' + parse2(a) + '</span></span>';
+          } else if (cmd === 'pmod' || cmd === 'bmod') {
+            // \pmod 9 -> （mod 9）；\bmod 9 -> mod 9
+            out += esc(cmd === 'pmod' ? '（mod ' : 'mod ') + parse2(readArg()) + esc(cmd === 'pmod' ? '）' : '');
           } else if (cmd === 'text' || cmd === 'mathrm' || cmd === 'operatorname' || cmd === 'mbox') {
             out += '<span style="font-style:normal">' + esc(readArg()) + '</span>';
           } else if (cmd === 'left' || cmd === 'right') {
@@ -122,11 +128,46 @@
   }
 
   function renderMath(tex, display) {
-    const html = texToHtml(tex);
+    // 唯一的收口点：所有数学（$...$、\(...\)、反引号公式、裸命令）都过这里，
+    // 在这里补花括号，四条路径就都不会踩 texToHtml 的「^ 只吃一个字符」。
+    const html = texToHtml(braceScripts(tex));
     return display
       ? '<span class="math math-block">' + html + '</span>'
       : '<span class="math">' + html + '</span>';
   }
+
+  /**
+   * 把裸写的上下标补成花括号形式：10^12 -> 10^{12}、x_1 -> x_{1}。
+   * 必须补 —— texToHtml 对不带花括号的 ^ 只吃一个字符（这是 TeX 语义），
+   * 而模型写 10^12 时想表达的是「10 的 12 次方」，不是「10¹2」。
+   * 多位指数只认纯数字，免得把 n^2m 这种误并成 n^{2m}。
+   */
+  function braceScripts(tex) {
+    return String(tex == null ? '' : tex)
+      .replace(/([A-Za-z0-9)\]）】])\^([0-9]{2,4})(?![0-9])/g, '$1^{$2}')
+      .replace(/([A-Za-z0-9)\]）】])\^(-?[A-Za-z0-9])(?![A-Za-z0-9{])/g, '$1^{$2}')
+      .replace(/([A-Za-z0-9)\]）】])_([0-9]{2,4})(?![0-9])/g, '$1_{$2}')
+      .replace(/([A-Za-z0-9)\]）】])_(-?[A-Za-z0-9])(?![A-Za-z0-9{])/g, '$1_{$2}');
+  }
+
+  /** 反引号里包的到底是公式还是代码？只认「强数学信号」，宁可漏判成代码。 */
+  function looksLikeMath(s) {
+    const x = unesc(s);
+    if (x.length > 60) return false;
+    if (/[×÷≡≤≥≠±∞√∑∏∫∈∉⊂∪∩∵∴∠⊥∥△→←↔]/.test(x)) return true;
+    if (/\\(?:times|div|cdot|pm|mp|frac|dfrac|sqrt|pmod|bmod|equiv|le|leq|ge|geq|ne|neq|approx|in|notin|subset|cup|cap|sum|prod|int|infty|pi|theta|alpha|beta|gamma|delta|lambda|mu|sigma|phi|omega|to|rightarrow|Rightarrow|leftarrow|leftrightarrow|angle|perp|parallel|triangle|because|therefore|ldots|cdots|quad|qquad|overline|vec|text)\b/.test(x)) return true;
+    if (/\^\s*[0-9{]/.test(x)) return true;   // 10^12 / x^{2}
+    if (/_\s*\{/.test(x)) return true;       // x_{1}
+    return false;
+  }
+
+  // 符号表里所有「不带参数」的字母命令，拼成一个正则。长的排前面，
+  // 免得 \in 抢先截断 \int、\to 抢掉 \triangle。带参数的（\frac \sqrt \pmod）
+  // 不在 SYM 里，由 inline() 单独处理。
+  const SYM_WORD_RE = new RegExp('\\\\(' +
+    Object.keys(SYM).filter(function (k) { return /^[A-Za-z]+$/.test(k); })
+      .sort(function (a, b) { return b.length - a.length; }).join('|') +
+    ')\\b', 'g');
 
   // ================= 代码高亮（轻量）=================
   const JS_KW = ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'do',
@@ -803,11 +844,33 @@
 
     let t = esc(src);
 
-    // 1) 行内代码
-    t = t.replace(/`([^`\n]+)`/g, (m, c) => keep('<code class="inl">' + c + '</code>'));
-    // 2) 数学 $$...$$ / $...$
+    // 1) 行内代码。反引号里如果明显是公式（`10^12`、`2×10^5`、`N×M`），
+    //    按公式排版 —— 模型很爱用反引号包公式，那会渲染成等宽代码、上下标全失效。
+    t = t.replace(/`([^`\n]+)`/g, (m, c) => keep(looksLikeMath(c)
+      ? renderMath(unesc(c), false)
+      : '<code class="inl">' + c + '</code>'));
+    // 2) 数学定界符，四种都认：$$...$$ / \[...\] 独立成行，$...$ / \(...\) 行内。
+    //    实测模型几乎不写 $（158 条助手回复里 0 条），最常用的是 \(...\)；
+    //    只认 $ 的话，这些式子会原样露出反斜杠和花括号。
     t = t.replace(/\$\$([\s\S]+?)\$\$/g, (m, c) => keep(renderMath(unesc(c), true)));
+    t = t.replace(/\\\[([\s\S]+?)\\\]/g, (m, c) => keep(renderMath(unesc(c), true)));
     t = t.replace(/\$(?!\s)([^$\n]+?)(?<!\s)\$/g, (m, c) => keep(renderMath(unesc(c), false)));
+    t = t.replace(/\\\(([\s\S]+?)\\\)/g, (m, c) => keep(renderMath(unesc(c), false)));
+    // 2b) 兜底：一个定界符都不加的裸写（10^12、x_{1}）。texToHtml 对不带花括号的
+    //     ^ 只吃一个字符（TeX 语义），所以这里必须自己把指数吃全，再交给它。
+    t = t.replace(/([A-Za-z0-9)\]）】])\^\{([^{}\n]{1,24})\}/g,
+      (m, b, e) => b + keep('<sup>' + texToHtml(unesc(e)) + '</sup>'));
+    t = t.replace(/([A-Za-z0-9)\]）】])\^(-?[A-Za-z0-9]{1,4})(?![A-Za-z0-9])/g,
+      (m, b, e) => b + keep('<sup>' + e + '</sup>'));
+    t = t.replace(/([A-Za-z0-9)\]）】])_\{([^{}\n]{1,24})\}/g,
+      (m, b, e) => b + keep('<sub>' + texToHtml(unesc(e)) + '</sub>'));
+    // 2c) 兜底：带参数的裸命令（\frac{1}{2} \sqrt{x} \pmod 9）
+    t = t.replace(/\\frac\{([^{}\n]{1,24})\}\{([^{}\n]{1,24})\}/g, m => keep(renderMath(m, false)));
+    t = t.replace(/\\sqrt\{([^{}\n]{1,24})\}/g, m => keep(renderMath(m, false)));
+    t = t.replace(/\\pmod\s*\{([^{}\n]{1,24})\}/g, m => keep(renderMath(m, false)));
+    t = t.replace(/\\pmod\s+([A-Za-z0-9]{1,12})/g, m => keep(renderMath(m, false)));
+    // 2d) 兜底：不带参数的裸命令（\times \equiv \le \pi ...）
+    t = t.replace(SYM_WORD_RE, m => keep(renderMath(m, false)));
     // 3) 图片 / 链接
     // 不写内联样式：尺寸/圆角/阴影统一交给 app.css 的 `.md img`，
     // 否则内联 style 优先级更高，CSS 里的改动会被静默盖掉。

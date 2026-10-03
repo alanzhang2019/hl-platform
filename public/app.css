@@ -2192,3 +2192,9 @@ body.resizing * { cursor: col-resize !important; }
 }
 .rsn.open .rsn-bd { display: block; }
 @keyframes thinkPulse { 0%, 100% { opacity: .3; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
+
+/* 裸写公式兜底出来的上下标（render.js 的 2b 分支）。
+   浏览器默认的 sup/sub 会把行高顶开，这里压住，并跟正文协调。 */
+.msg sup, .msg sub { font-size: .74em; line-height: 0; position: relative; vertical-align: baseline; }
+.msg sup { top: -.5em; }
+.msg sub { bottom: -.25em; }

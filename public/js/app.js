@@ -1548,6 +1548,13 @@
             // 服务端说"这条会配图"（画完才落库，比 done 晚几十秒）。
             // 只是先立个旗子，真正的等待放到 finally 里做，别卡住事件循环。
             expectingArt = j || { kind: 'svg' };
+          } else if (ev === 'done') {
+            // 服务端确认这条已经写进库了。把气泡推进到终态 ——
+            // 「正在生成…」是渲染那一刻输出的一次性节点（msgExtraHTML 只在那儿求值一次），
+            // 不在这里摘掉，它会一直挂在答案下面，学生以为还在生成。
+            a.data.status = 'done';
+            a.el.querySelectorAll('.msg-flag').forEach(n => { if (/正在生成/.test(n.textContent)) n.remove(); });
+            if (rAcc) { const _t = a.el.querySelector('.rsn'); if (_t) _t.classList.remove('live'); }
           } else if (ev === 'error') {
             errored = j.message || '未知错误';
           }
@@ -1686,6 +1693,12 @@
           }
           else if (ev === 'attachment') { appendIllustration(m, j.attachment); }
           else if (ev === 'art') { expectingArt = j || { kind: 'svg' }; }
+          else if (ev === 'done') {
+            // 同上：重新生成走的是另一份 SSE 循环，终态也得在这里推进。
+            m.data.status = 'done';
+            m.el.querySelectorAll('.msg-flag').forEach(n => { if (/正在生成/.test(n.textContent)) n.remove(); });
+            if (rAcc) { const _t = m.el.querySelector('.rsn'); if (_t) _t.classList.remove('live'); }
+          }
         }
       }
       if (rid) acc = await syncReplyFromDb(rid, m, acc);

@@ -50,6 +50,22 @@ const SOCRATIC_CORE = `你是一位面向中小学生的 AI 学习伙伴。你�
 像一个耐心但不啰嗦的同伴。不说"你真棒"这类空话，而是具体指出他哪里想得好。
 不用感叹号堆砌情绪。`;
 
+const MATH_FORMAT_RULES = `【数学式的写法 —— 写错学生就看不懂】
+公式必须用定界符包起来，前端才会排版。裸写的 10^12 会原样显示成「10^12」，
+学生看到的是一堆看不懂的符号。
+- 行内公式：用 $...$ 包起来。例：$10^{12}$、$a_n$、$\\frac{1}{2}$、$2\\times10^{5}$
+- 独立成行的公式：用 $$...$$ 单独占一段。例：$$2\\times5\\equiv1\\pmod{9}$$
+硬性要求：
+1. **绝不裸写**。不要出现 10^12、a_n、2×10^5 这种没有定界符的形式。
+2. **绝不用反引号包公式**。反引号 \` 是给代码用的，公式会被渲染成等宽代码块，上下标全部失效。
+3. 乘法写 $\\times$（或直接用 × 号），**不要用 ASCII 星号** —— 它会被当成 Markdown 的斜体标记吃掉。
+4. 上标 $x^{2}$、下标 $x_{1}$、分数 $\\frac{a}{b}$、根号 $\\sqrt{x}$、取模 $\\pmod{9}$，都要用这些命令。
+5. 中文和公式之间留一个空格，别粘在一起。
+正确示范：
+「余数等于各位数字之和除以 9 的余数，因为 $10\\equiv1\\pmod{9}$。数据范围到 $10^{12}$，不能一个个枚举。」
+错误示范：
+「因为 10 ≡ 1 (mod 9)。数据范围到 10^12，不能一个个枚举。」（没用 $ 包起来，学生看到的是原始符号）`;
+
 const MODE_PROMPTS = {
   selfstudy: `【当前模式：自学引导】
 围绕学生自己的目标推进。每一步都要问他"你觉得下一步该做什么"，让他自己规划。
@@ -144,6 +160,9 @@ function buildTempDocContext(tempDocs, budget) {
 function buildSystemPrompt({ mode, spaceName, grade, projectInstructions, docNames, memories, skillPrompts, docContext, tempDocs }) {
   const parts = [SOCRATIC_CORE];
   if (MODE_PROMPTS[mode]) parts.push(MODE_PROMPTS[mode]);
+  // 数学式的写法约束。放在画图协议之前 —— 它管的是"怎么把式子写出来"，比画图更基础。
+  // 前端只认 $...$（以及 \(...\) / \[...\]），裸写会原样显示成一堆符号。
+  parts.push(MATH_FORMAT_RULES);
   // 技能提示词放在方法说明之后、画图协议之前 —— 它是对"怎么讲"的约束，优先级高于画图
   if (skillPrompts && skillPrompts.length) parts.push(skillPrompts.join('\n\n'));
   parts.push(ARTIFACT_RULES);
