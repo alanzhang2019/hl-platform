@@ -822,6 +822,91 @@ async function visualizeTests() {
 }
 
 // ============================================================
+// 八、学习模式按会话持久化（2026-10-03）
+//
+// 背景：模式原本只跟着**单次请求**走，不落会话、也不落前端持久化。
+// 刷新页面选择器就回到「自学引导」，用户以为还在「费曼学习法」——
+// 表现就是"这几个模式测不出区别"。
+// ============================================================
+async function modeTests() {
+  group('八、学习模式按会话持久化');
+  const appjs = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+
+  await t('core.MODES 是白名单，且与前端下拉一致', async function () {
+    assert.deepStrictEqual(core.MODES.slice().sort(), ['diagnosis', 'feynman', 'selfstudy']);
+  });
+
+  await t('非法模式名归一成默认，不抛错', async function () {
+    assert.strictEqual(core.normMode('feynman'), 'feynman');
+    assert.strictEqual(core.normMode('bogus'), 'selfstudy', '笔误的模式名不能落库');
+    assert.strictEqual(core.normMode(''), 'selfstudy');
+    assert.strictEqual(core.normMode(null), 'selfstudy');
+    assert.strictEqual(core.normMode(undefined), 'selfstudy');
+  });
+
+  await t('新建会话默认 selfstudy，可以指定模式', async function () {
+    const a = core.createConversation('sp_mode', null, {});
+    assert.strictEqual(a.mode, 'selfstudy', '不传就是默认');
+    const b = core.createConversation('sp_mode', null, { mode: 'feynman' });
+    assert.strictEqual(b.mode, 'feynman', '传了要存住');
+  });
+
+  await t('updateConversation 能改模式，且会归一', async function () {
+    const c = core.createConversation('sp_mode', null, {});
+    assert.strictEqual(core.updateConversation('sp_mode', c.id, { mode: 'diagnosis' }).mode, 'diagnosis');
+    // 关键：笔误不能静默落库 —— 否则模式段落整段不注入，回答悄悄退回默认
+    assert.strictEqual(core.updateConversation('sp_mode', c.id, { mode: 'typo!!' }).mode, 'selfstudy');
+  });
+
+  await t('模式是**按会话**存的，两条会话互不影响', async function () {
+    const a = core.createConversation('sp_mode2', null, { mode: 'feynman' });
+    const b = core.createConversation('sp_mode2', null, { mode: 'diagnosis' });
+    core.updateConversation('sp_mode2', a.id, { mode: 'selfstudy' });
+    assert.strictEqual(core.getConversation('sp_mode2', a.id).mode, 'selfstudy');
+    assert.strictEqual(core.getConversation('sp_mode2', b.id).mode, 'diagnosis', '改 A 不该动到 B');
+  });
+
+  await t('getConversation 一定回 mode 字段（前端靠它恢复选择器）', async function () {
+    const c = core.createConversation('sp_mode3', null, {});
+    const got = core.getConversation('sp_mode3', c.id);
+    assert.ok('mode' in got, '缺这个字段，前端就恢复不了');
+  });
+
+  await t('服务端兜底顺序：本次请求 → 会话 → 默认', async function () {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    assert.ok(src.indexOf("const useMode = opt.mode || (opt.conv && opt.conv.mode) || 'selfstudy';") >= 0,
+      '写死 selfstudy 的话，前端漏传一次就会悄悄换模式，而界面上还显示着别的');
+    assert.ok(src.indexOf('mode: b.mode || conv.mode,') >= 0, '主链路要有兜底');
+    // 重新生成那条分支也必须兜底，否则"重新生成"会换掉模式
+    assert.ok(src.indexOf('mode: b.mode || conv.mode, skillIds: b.skillIds') >= 0,
+      'regenerate 分支漏了兜底');
+  });
+
+  await t('前端：切模式要同时落 localStorage 和当前会话', async function () {
+    assert.ok(appjs.indexOf("const MODE_KEY = 'hl_mode'") >= 0, '要有本地记忆键');
+    assert.ok(appjs.indexOf('function setMode(m, opts)') >= 0, '要有统一的 setMode');
+    assert.ok(appjs.indexOf("localStorage.setItem(MODE_KEY, S.mode)") >= 0, '要落本地');
+    assert.ok(appjs.indexOf("body: { mode: S.mode }") >= 0, '要 PATCH 到当前会话');
+  });
+
+  await t('前端：openConv 要恢复这条对话自己的模式', async function () {
+    assert.ok(appjs.indexOf('if (c.mode) setMode(c.mode, { silent: true });') >= 0,
+      '漏了这一步，打开旧对话时选择器显示的是上一条对话的模式');
+  });
+
+  await t('前端：启动时把选择器同步到记住的模式', async function () {
+    assert.ok(appjs.indexOf('setMode(savedMode(), { silent: true });') >= 0,
+      '不同步的话，S.mode 是记住的值、选择器还停在 HTML 默认，显示与实际不符');
+  });
+
+  await t('前端：新建对话沿用上次的模式，而不是硬回默认', async function () {
+    assert.ok(appjs.indexOf('setMode(savedMode(), { silent: true });') >= 0);
+    assert.ok(appjs.indexOf('mode: S.mode, projectId: S.pendingProjectId') >= 0,
+      '创建会话时要带上模式');
+  });
+}
+
+// ============================================================
 (async function main() {
   console.log('临时数据目录：' + TMP);
   try {
@@ -832,6 +917,7 @@ async function visualizeTests() {
     await reasonTests();
     await ttsSlotTests();
     await visualizeTests();
+    await modeTests();
   } catch (e) {
     console.error('\n测试运行器本身出错：', e);
     fail++;

@@ -42,9 +42,18 @@ for rel in "$@"; do
     base=$(basename "$rel")
     src="$UP/$base"
     if [ ! -f "$src" ]; then echo "❌ 缺文件：$src（是不是忘了 scp？）" >&2; exit 1; fi
-    if [ ! -f "$APP/$rel" ]; then echo "❌ 目标不存在：$APP/$rel（相对路径写错了？）" >&2; exit 1; fi
-    mkdir -p "$(dirname "$BK/$rel")"
-    cp -a "$APP/$rel" "$BK/$rel"
+    # 父目录必须存在 —— 这是防"相对路径写错"的检查。
+    # 目标文件本身允许不存在（新增文件是正常场景），只是提示一声。
+    if [ ! -d "$APP/$(dirname "$rel")" ]; then
+        echo "❌ 目标目录不存在：$APP/$(dirname "$rel")（相对路径写错了？）" >&2
+        exit 1
+    fi
+    if [ -f "$APP/$rel" ]; then
+        mkdir -p "$(dirname "$BK/$rel")"
+        cp -a "$APP/$rel" "$BK/$rel"
+    else
+        printf '  (新增文件，无需备份) %s\n' "$rel"
+    fi
     cp -f "$src" "$APP/$rel"
     printf '  ✅ %-28s %s 字节\n' "$rel" "$(wc -c < "$APP/$rel")"
 done

@@ -16,6 +16,13 @@
   const $ = s => document.querySelector(s);
   const $$ = s => Array.prototype.slice.call(document.querySelectorAll(s));
   const TOKEN_KEY = 'hl_token', THEME_KEY = 'hl_theme', FONT_KEY = 'hl_font';
+  // 上次用的学习模式。模式是**按会话**存的（跟 model / 智能体一样），
+  // 这个只是为了「新建对话时沿用上次选的模式」—— 不存的话新建一条就回到默认，
+  // 用户会以为"切了模式没生效"。
+  const MODE_KEY = 'hl_mode';
+  const MODES = ['selfstudy', 'feynman', 'diagnosis'];
+  const normMode = m => (MODES.indexOf(String(m || '')) >= 0 ? String(m) : 'selfstudy');
+  const savedMode = () => normMode(localStorage.getItem(MODE_KEY));
 
   // ================= 状态 =================
   const S = {
@@ -24,7 +31,7 @@
     space: null,
     convs: [],
     convId: '',
-    mode: 'selfstudy',
+    mode: savedMode(),
     model: 'default',
     projects: [],
     streaming: false,
@@ -786,8 +793,12 @@
     setTabBadge('skills', (S.skillEnabled || []).length);
     renderMeChip();
     switchView('chat');
+    // 先把选择器同步到本地记住的模式。不做这一步的话，刷新后 S.mode 是记住的值、
+    // 而选择器还停在 HTML 默认的「自学引导」—— 界面显示的和实际生效的对不上。
+    setMode(savedMode(), { silent: true });
     // 刷新后不要落在空白对话上——那看起来像"东西丢了"。
-    // 有历史就直接接上最近一条，没有才显示引导语。
+    // 有历史就直接接上最近一条（openConv 会把那条对话自己的模式恢复回来），
+    // 没有才显示引导语。
     if (S.convs.length) await openConv(S.convs[0].id);
     else renderStreamEmpty();
   }
@@ -1610,7 +1621,7 @@
     if (S.convId) return S.convId;
     const r = await api('/api/conversations', {
       method: 'POST',
-      body: { model: S.model, agentId: S.agentId, webSearch: S.webSearch, projectId: S.pendingProjectId || undefined },
+      body: { model: S.model, agentId: S.agentId, webSearch: S.webSearch, mode: S.mode, projectId: S.pendingProjectId || undefined },
     });
     S.convId = r.conversation.id;
     S.pendingProjectId = null;
@@ -1930,6 +1941,9 @@
       if (c.model) { S.model = c.model; $('#modelSel').value = S.model; }
       S.agentId = c.agentId || '';
       S.webSearch = !!c.webSearch;
+      // 恢复这条对话自己的学习模式。以前这里漏了，所以打开旧对话时
+      // 选择器显示的是上一条对话的模式 —— 与这条对话实际用的模式不一致。
+      if (c.mode) setMode(c.mode, { silent: true });
       renderAgentBtn(); renderWebBtn();
       const box = streamIn();
       box.innerHTML = '';
@@ -1980,10 +1994,31 @@
     sel.innerHTML = opts.join('');
   }
 
+  /**
+   * 切学习模式。三件事缺一不可：
+   *   ① 更新内存里的 S.mode（下一次请求用它）
+   *   ② 存进 localStorage（新建对话时沿用，刷新后也不会回到默认）
+   *   ③ 存进当前会话（下次打开这条对话能恢复回来）
+   * 以前只做了 ①，所以刷新页面选择器就回到「自学引导」——
+   * 用户以为还在「费曼学习法」，其实已经换回默认模式了。
+   */
+  function setMode(m, opts) {
+    S.mode = normMode(m);
+    const sel = $('#modeSel');
+    if (sel && sel.value !== S.mode) sel.value = S.mode;
+    try { localStorage.setItem(MODE_KEY, S.mode); } catch (e) {}
+    if (!(opts && opts.silent) && S.convId) {
+      api('/api/conversations/' + S.convId, { method: 'PATCH', body: { mode: S.mode } }).catch(() => {});
+    }
+  }
+
   function newConv(opts) {
     // 从项目视图「新建对话」进来：记住项目，第一条消息创建对话时归入该项目
     S.pendingProjectId = (opts && opts.projectId) || null;
     S.convId = '';
+    // 新对话沿用"上次用的模式"，而不是硬回到默认 —— 否则用户切了模式、
+    // 再开一条新对话，会以为模式没生效。
+    setMode(savedMode(), { silent: true });
     // keepAgent：从能力中心「用它开一段对话」进来时保留刚选好的技能身份。
     // 其余入口一律清空 —— 新对话默认不背上一段的智能体。
     const keepAgent = !!(opts && opts.keepAgent);
@@ -5953,7 +5988,10 @@
       const fl = e.dataTransfer && e.dataTransfer.files;
       if (fl && fl.length) { pickAttach(fl); toast('正在读取拖入的文件…'); }
     });
-    $('#modeSel').addEventListener('change', e => { S.mode = e.target.value; toast('已切到「' + e.target.selectedOptions[0].text + '」'); });
+    $('#modeSel').addEventListener('change', e => {
+      setMode(e.target.value);
+      toast('已切到「' + e.target.selectedOptions[0].text + '」');
+    });
     const vizChk = $('#vizChk');
     if (vizChk) { vizChk.addEventListener('change', e => { S.visualize = e.target.checked; toast(S.visualize ? '图表模式已开启：AI 优先用图表回复' : '图表模式已关闭'); }); }
     $('#modelSel').addEventListener('change', e => {

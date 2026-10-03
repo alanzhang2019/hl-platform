@@ -5,6 +5,19 @@
  */
 const D = require('./db');
 
+/**
+ * 学习模式的合法取值。**唯一来源**，别在别处再抄一份字符串数组。
+ * 白名单而不是"原样存"：前端传什么就存什么的话，一个笔误的模式名会静默落库，
+ * 之后 buildSystemPrompt 匹配不上、模式段落整段不注入 —— 回答悄悄退回默认行为，
+ * 而看板统计里还显示着一个根本不存在的模式名。
+ */
+const MODES = ['selfstudy', 'feynman', 'diagnosis'];
+/** 归一化：非法值一律回落到默认模式，绝不抛错（前端传脏值不该让整条对话发不出去） */
+function normMode(m) {
+  const v = String(m == null ? '' : m).trim();
+  return MODES.indexOf(v) >= 0 ? v : 'selfstudy';
+}
+
 // ---------- 活动流水（日报/周报/曲线的原料）----------
 function logActivity(spaceId, userId, kind, refId, meta) {
   D.run('INSERT INTO activity(space_id,user_id,kind,ref_id,meta_json,at) VALUES(?,?,?,?,?,?)',
@@ -84,20 +97,20 @@ function listConversations(spaceId, { projectId, favorite, q } = {}) {
   sql += ' ORDER BY updated_at DESC LIMIT 200';
   return D.all(sql, ...p).map(c => ({
     id: c.id, title: c.title, projectId: c.project_id, model: c.model,
-    agentId: c.agent_id || '', webSearch: !!c.web_search,
+    agentId: c.agent_id || '', webSearch: !!c.web_search, mode: normMode(c.mode),
     isFavorite: !!c.is_favorite, instructions: c.instructions,
     createdAt: c.created_at, updatedAt: c.updated_at,
     messageCount: (D.get('SELECT COUNT(*) c FROM messages WHERE conversation_id = ? AND deleted = 0', c.id) || {}).c || 0,
   }));
 }
 
-function createConversation(spaceId, userId, { title, projectId, model, instructions, agentId, webSearch } = {}) {
+function createConversation(spaceId, userId, { title, projectId, model, instructions, agentId, webSearch, mode } = {}) {
   const id = D.uid('c_');
-  D.run(`INSERT INTO conversations(id,space_id,user_id,project_id,title,model,instructions,agent_id,web_search,created_at,updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+  D.run(`INSERT INTO conversations(id,space_id,user_id,project_id,title,model,instructions,agent_id,web_search,mode,created_at,updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, spaceId, userId || null, projectId || null,
     String(title || '新对话').slice(0, 60), String(model || 'default'), String(instructions || '').slice(0, 2000),
-    agentId || null, webSearch ? 1 : 0, D.now(), D.now());
+    agentId || null, webSearch ? 1 : 0, normMode(mode), D.now(), D.now());
   logActivity(spaceId, userId, 'chat', id);
   return getConversation(spaceId, id);
 }
@@ -109,6 +122,7 @@ function getConversation(spaceId, id) {
     id: c.id, title: c.title, projectId: c.project_id, model: c.model,
     instructions: c.instructions, isFavorite: !!c.is_favorite,
     agentId: c.agent_id || '', webSearch: !!c.web_search,
+    mode: normMode(c.mode),
     createdAt: c.created_at, updatedAt: c.updated_at,
   };
 }
@@ -123,6 +137,7 @@ function updateConversation(spaceId, id, patch) {
   if (patch.projectId !== undefined) D.run('UPDATE conversations SET project_id = ? WHERE id = ?', patch.projectId || null, id);
   if (patch.agentId !== undefined) D.run('UPDATE conversations SET agent_id = ? WHERE id = ?', patch.agentId || null, id);
   if (patch.webSearch !== undefined) D.run('UPDATE conversations SET web_search = ? WHERE id = ?', patch.webSearch ? 1 : 0, id);
+  if (patch.mode !== undefined) D.run('UPDATE conversations SET mode = ? WHERE id = ?', normMode(patch.mode), id);
   D.run('UPDATE conversations SET updated_at = ? WHERE id = ?', D.now(), id);
   return getConversation(spaceId, id);
 }
@@ -349,6 +364,7 @@ function stats(spaceId) {
 
 module.exports = {
   logActivity, stats,
+  MODES, normMode,
   listProjects, createProject, getProject, updateProject, deleteProject,
   listConversations, createConversation, getConversation, updateConversation, deleteConversation,
   listMessages, addMessage, buildContext, safeJSON, shapeMessage,

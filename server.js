@@ -69,7 +69,7 @@ const adminDash = require('./server/admin');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-03-admin-dash7';
+const APP_VERSION = '2026-10-03-admin-dash8';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -264,7 +264,10 @@ async function streamReply(req, res, ctx, sid, opt) {
   // ★ 模式只算一次，prompt 与落库共用同一个值。
   //   分开写的话，哪天默认值改了、或者某条分支忘了同步，看板上的模式分布
   //   就会和实际生效的模式不一致 —— 一个会撒谎的统计比没有统计更坏。
-  const useMode = opt.mode || 'selfstudy';
+  // ★ 兜底顺序：本次请求 → 会话上存的 → 默认。
+  //   直接写死 'selfstudy' 的话，只要前端漏传一次（比如重新生成那条分支忘了带），
+  //   整条回答就会悄悄换成默认模式，而界面上选择器还显示着别的模式。
+  const useMode = opt.mode || (opt.conv && opt.conv.mode) || 'selfstudy';
   let system = llm.buildSystemPrompt({
     mode: useMode,
     spaceName: (auth.getSpace(sid) || {}).name,
@@ -1010,17 +1013,20 @@ async function handleApi(req, res, u) {
     let conv = b.conversationId ? core.getConversation(sid, b.conversationId) : null;
     if (!conv) conv = core.createConversation(sid, ctx.userId, {
       projectId: b.projectId, model: b.model, agentId: b.agentId, webSearch: b.webSearch,
+      mode: b.mode,
     });
-    // 会话级设置随每次发送同步（前端改了模型/智能体/联网开关，服务端要跟上）
+    // 会话级设置随每次发送同步（前端改了模型/智能体/联网开关/学习模式，服务端要跟上）
     const patch = {};
     if (b.model) patch.model = b.model;
     if (b.agentId !== undefined) patch.agentId = b.agentId;
     if (b.webSearch !== undefined) patch.webSearch = b.webSearch;
+    if (b.mode !== undefined) patch.mode = b.mode;
     if (Object.keys(patch).length) conv = core.updateConversation(sid, conv.id, patch);
 
     return streamReply(req, res, ctx, sid, {
       conv: conv, text: text, model: b.model || conv.model,
-      mode: b.mode, skillIds: b.skillIds, attachments: atts,
+      // ★ 模式优先取本次请求带的，其次取会话上存的 —— 前端漏传时不该悄悄退回默认模式
+      mode: b.mode || conv.mode, skillIds: b.skillIds, attachments: atts,
       clientId: b.clientId, webSearch: b.webSearch !== undefined ? !!b.webSearch : !!conv.webSearch,
       visualize: b.visualize,
       body: b,
@@ -1078,7 +1084,7 @@ async function handleApi(req, res, u) {
       const lastUser = [...hist].reverse().find(x => x.role === 'user');
       return streamReply(req, res, ctx, sid, {
         conv: conv, text: (lastUser && lastUser.content) || '', model: b.model || conv.model,
-        mode: b.mode, skillIds: b.skillIds, skipUserMessage: true,
+        mode: b.mode || conv.mode, skillIds: b.skillIds, skipUserMessage: true,
         webSearch: !!conv.webSearch, visualize: b.visualize, body: b,
       });
     }

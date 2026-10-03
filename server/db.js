@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   instructions TEXT NOT NULL DEFAULT '',   -- 对话级自定义指令（"设置指令"）
   agent_id     TEXT,                       -- 选中的智能体（映射到能力中心的技能）
   web_search   INTEGER NOT NULL DEFAULT 0, -- 联网搜索开关
+  mode         TEXT NOT NULL DEFAULT 'selfstudy', -- 学习模式（自学引导/费曼/学情诊断）
   is_favorite  INTEGER NOT NULL DEFAULT 0,
   created_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL
@@ -522,6 +523,12 @@ const MIGRATIONS = [
   // 对话级设置：智能体 + 联网搜索
   ['conversations', 'agent_id', 'TEXT'],
   ['conversations', 'web_search', 'INTEGER NOT NULL DEFAULT 0'],
+  // 学习模式（自学引导 / 费曼学习法 / 学情诊断）。
+  // ★ 以前模式只跟着**单次请求**走，不落会话也不落前端持久化 ——
+  //   刷新页面选择器就回到「自学引导」，用户以为还在「费曼学习法」，
+  //   实际已经换回默认模式了。表现就是"这几个模式测不出区别"。
+  //   现在跟 model / agent_id 一样按会话存。
+  ['conversations', 'mode', "TEXT NOT NULL DEFAULT 'selfstudy'"],
   // 批次3 知识卡深度：连续答对计数 + 复习计划状态 + 自由练习标记
   ['cards', 'consecutive_right', 'INTEGER NOT NULL DEFAULT 0'],
   ['cards', 'plan', "TEXT NOT NULL DEFAULT 'scheduled'"],
