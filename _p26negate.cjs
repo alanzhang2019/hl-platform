@@ -76,6 +76,7 @@ const CASES = [
 ];
 
 let bad = 0;
+let basePass = 0, baseFail = 0;
 for (const [name, mutate, wantRed] of CASES) {
   const src = mutate ? mutate(good) : good;
   if (mutate && src === good) {
@@ -84,6 +85,7 @@ for (const [name, mutate, wantRed] of CASES) {
   }
   fs.writeFileSync(target, src, 'utf8');
   const r = runSuite();
+  if (!mutate) { basePass = r.pass; baseFail = r.fail; }   // 记基线（还原后的状态）
   const red = r.fail !== null && r.fail > 0;
   const crashed = r.pass === null;
   const got = crashed ? true : red;          // 套件崩了也算"抓到了"
@@ -93,6 +95,11 @@ for (const [name, mutate, wantRed] of CASES) {
     (crashed ? '（套件异常退出）' : ''));
 }
 fs.writeFileSync(target, good, 'utf8');
-console.log(bad ? '\n❌ 反证有 ' + bad + ' 项不符：套件对这些改动不敏感！'
-                : '\n✅ 反证全部符合预期：六处修复每拔掉一处，套件都变红。');
+// ★ 摘要行必须满足 runner 的契约：/通过 (\d+) 项，失败 (\d+) 项/
+//   不打这行，_run-tests.cjs 会把这个套件显示成「0 项」——
+//   看起来像"没跑"，实际是跑了却没报数（本项目 runner 的既有判据）。
+//   数字口径与 _tiernegative 一致：**还原后的 pass/fail**（反证本身不计入通过数）。
+console.log('\n还原后：通过 ' + basePass + ' 项，失败 ' + baseFail + ' 项');
+console.log(bad ? '❌ 反证有 ' + bad + ' 项不符：套件对这些改动不敏感！（这一条本身算失败）'
+                : '✅ 反证全部符合预期：六处修复每拔掉一处，套件都变红。');
 process.exit(bad ? 1 : 0);
