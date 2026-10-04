@@ -49,7 +49,10 @@ const STAGES = [
  * key 与前端 KB_SUBS 的 key 对齐（英语在前端叫 en）。
  */
 const UNLOCKS = [
-  { stage: 1, features: ['chat', 'projects', 'docs', 'cards', 'dash', 'parent'] },
+  // ★ 批次28：班级 + 班级排行榜从**阶段1**就给。
+  //   理由：它是"激励自学"的场，锁在后面就变成"先自学够了才能跟同学一起学"，
+  //   鸡生蛋。而且老师建班、学生输码进班这件事本身要越早能发生越好。
+  { stage: 1, features: ['chat', 'projects', 'docs', 'cards', 'dash', 'parent', 'class'] },
   { stage: 2, features: ['skills'] },
   { stage: 3, features: ['memory', 'exam'] },
   { stage: 4, features: ['en'] },
@@ -59,7 +62,7 @@ const UNLOCKS = [
 const FEATURE_LABEL = {
   chat: '对话', projects: '项目', docs: '资料', cards: '知识卡',
   skills: '能力', memory: '记忆', exam: '测评', en: '英语',
-  pool: '共享池', dash: '看板', parent: '家长视角',
+  pool: '共享池', dash: '看板', parent: '家长视角', class: '班级',
 };
 
 function ensure(spaceId, userId) {

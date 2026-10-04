@@ -134,7 +134,7 @@ async function getJSON(url, token) {
       ok('宠物解锁表随 /api/pet 一起返回（批次7）', !!u, JSON.stringify(pet.json).slice(0, 120));
       if (u) {
         ok('新空间 stage = 1（嫩芽）', u.stage === 1, 'stage=' + u.stage);
-        ok('新空间解锁 6 项（对话/项目/资料/知识卡/看板/家长视角）', u.unlocked.length === 6, JSON.stringify(u.unlocked));
+        ok('新空间解锁 7 项（对话/项目/资料/知识卡/看板/家长视角；批次28 加「班级」）', u.unlocked.length === 7, JSON.stringify(u.unlocked));
         ok('新空间就含看板（学习日报在阶段1，批次10 从阶段5 提上来的）',
           u.unlocked.indexOf('dash') >= 0, JSON.stringify(u.unlocked));
         ok('新空间不含 skills（阶段2 才给）', u.unlocked.indexOf('skills') < 0, JSON.stringify(u.unlocked));

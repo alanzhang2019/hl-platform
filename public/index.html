@@ -503,6 +503,21 @@
           <div class="card-list" id="poolList"></div>
         </div>
 
+        <!-- 班级（批次28）：全站唯一"把人排序"的地方。
+             看的是「知识卡状态真的往前推」，不是在线时长；榜单只在班内可见。 -->
+        <div class="kb-sub" id="view-class" hidden>
+          <div class="topbar">
+            <div class="tb-txt"><div class="t">班级</div><div class="s">和同班同学一起看谁在往前推。看的是「推进」，不是在线时长</div></div>
+            <div class="sp"></div>
+            <button class="btn ghost sm" id="clsJoinBtn" type="button">输入入班码</button>
+            <button class="btn primary sm" id="clsNewBtn" type="button">+ 建一个班</button>
+          </div>
+          <div class="cls-wrap">
+            <aside class="cls-list" id="clsList"></aside>
+            <div class="cls-main" id="clsMain"></div>
+          </div>
+        </div>
+
         <!-- 项目（知识库分区）-->
         <div class="kb-sub" id="view-projects" hidden>
           <div class="topbar">

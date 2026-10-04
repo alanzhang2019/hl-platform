@@ -65,11 +65,12 @@ const english = require('./server/english');
 const exam = require('./server/exam');
 const growth = require('./server/growth');
 const pool = require('./server/pool');
+const leaderboard = require('./server/leaderboard');
 const adminDash = require('./server/admin');
 
 // 版本号：每次发布前 bump。不改的话，线上跑的是新代码还是旧沙箱根本分不出来
 // （旧项目就吃过这个亏 —— 只能靠比对某个函数在不在前端文件里来判断）。
-const APP_VERSION = '2026-10-04-pdf27';
+const APP_VERSION = '2026-10-04-leaderboard1';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -502,7 +503,7 @@ async function handleApi(req, res, u) {
       ok: true, version: APP_VERSION,
       apis: ['auth', 'sms', 'docs', 'avatars', 'session', 'announcements', 'spaces', 'chat', 'stream',
         'messages', 'tts', 'translate', 'favorites', 'upload', 'tempdocs', 'jobs', 'agents', 'search', 'shares',
-        'projects', 'memory', 'share', 'cards', 'flashcards', 'pet', 'skills', 'kb', 'dashboard', 'daily', 'weekly', 'parent', 'english', 'exam', 'growth', 'pool'],
+        'projects', 'memory', 'share', 'cards', 'flashcards', 'pet', 'skills', 'kb', 'dashboard', 'daily', 'weekly', 'parent', 'english', 'exam', 'growth', 'pool', 'class', 'leaderboard'],
       mockLLM: llm.isMock(),
       adminPanel: !!ADMIN_PASSWORD,
     });
@@ -1704,6 +1705,76 @@ async function handleApi(req, res, u) {
   // 7 阶段成长画像（批次22-③）：全部现算、不落库、不评分。见 server/growth.js 头部。
   if (p === '/api/growth' && method === 'GET') {
     return sendJSON(res, 200, { ok: true, portrait: growth.portrait(sid) });
+  }
+
+  // ---------- 班级 + 班级排行榜（批次28）----------
+  // ★ 这是全站**唯一**允许"把人排序"的地方。growth 画像的"不评分/不给排行"规矩
+  //   依然有效，两者刻意分开。设计取舍见 server/leaderboard.js 头部。
+  // ★ 班级**跨空间**，但每个接口都要求登录（ctx.userId）—— 空间口令登录没有身份，
+  //   无法归属到人，也就无法进班。
+  if (p === '/api/class' && method === 'GET') {
+    return sendJSON(res, 200, { ok: true, classes: leaderboard.myClasses(ctx.userId) });
+  }
+  if (p === '/api/class' && method === 'POST') {
+    const b = await readBody(req);
+    try {
+      return sendJSON(res, 200, { ok: true, class: leaderboard.createClass(ctx.userId, b.name) });
+    } catch (e) {
+      const map = { BAD_NAME: 400, NO_ACCOUNT: 400 };
+      return sendJSON(res, map[e.code] || 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
+  }
+  if (p === '/api/class/join' && method === 'POST') {
+    const b = await readBody(req);
+    try {
+      const r = leaderboard.joinClass(ctx.userId, sid, b.code);
+      return sendJSON(res, 200, { ok: true, class: r.class, already: r.already });
+    } catch (e) {
+      const map = { BAD_CODE: 400, NO_ACCOUNT: 400, NOT_FOUND: 404, CLASS_FULL: 409 };
+      return sendJSON(res, map[e.code] || 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
+  }
+  if (p === '/api/class/leave' && method === 'POST') {
+    const b = await readBody(req);
+    try {
+      return sendJSON(res, 200, { ok: true, ...leaderboard.leaveClass(ctx.userId, b.classId) });
+    } catch (e) {
+      const map = { NOT_FOUND: 404, OWNER_CANNOT_LEAVE: 400 };
+      return sendJSON(res, map[e.code] || 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
+  }
+  if (p === '/api/class/archive' && method === 'POST') {
+    const b = await readBody(req);
+    try {
+      return sendJSON(res, 200, { ok: true, ...leaderboard.archiveClass(ctx.userId, b.classId) });
+    } catch (e) {
+      const map = { NOT_FOUND: 404, FORBIDDEN: 403 };
+      return sendJSON(res, map[e.code] || 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
+  }
+  // 班级详情（成员名单）。只有班内人看得到。
+  if (p === '/api/class/detail' && method === 'GET') {
+    try {
+      return sendJSON(res, 200, { ok: true, ...leaderboard.classDetail(u.searchParams.get('classId'), ctx.userId) });
+    } catch (e) {
+      const map = { NOT_FOUND: 404, FORBIDDEN: 403 };
+      return sendJSON(res, map[e.code] || 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
+  }
+  // 班级排行榜。metric 三选一，见 leaderboard.METRICS。
+  if (p === '/api/leaderboard' && method === 'GET') {
+    try {
+      return sendJSON(res, 200, {
+        ok: true,
+        board: leaderboard.board(u.searchParams.get('classId'), {
+          metric: u.searchParams.get('metric') || 'understand',
+          viewerUserId: ctx.userId,
+        }),
+      });
+    } catch (e) {
+      const map = { NOT_FOUND: 404, FORBIDDEN: 403 };
+      return sendJSON(res, map[e.code] || 400, { error: e.code || 'BAD_INPUT', message: e.message });
+    }
   }
   if (p === '/api/exams' && method === 'GET') {
     return sendJSON(res, 200, { ok: true, exams: exam.listExams(sid, { projectId: u.searchParams.get('projectId') || undefined }) });

@@ -276,6 +276,38 @@ CREATE TABLE IF NOT EXISTS pet_events (
   created_at     INTEGER NOT NULL
 );
 
+-- 班级（批次28）：老师建班 → 学生输「入班码」加入 → 班级榜。
+--
+-- 为什么需要它：本平台原来的"空间"是**每个学习者一个**（spaces.name_key
+-- 存的是归一化姓名，见 db.js 顶部），它天然是"一个人"的容器，不是"一群人"。
+-- 排行榜要能跟认识的人比（这是唯一有意义的比较范围），就需要一个真正的分组实体。
+--
+-- ★ 班级**跨空间**：一个班里的每个学生各有各的 space，班级靠 user_id 把人聚起来。
+--   所以 class_members 冗余存 space_id —— 取 pets / pet_events / cards 都要
+--   按 (space_id, user_id) 这对键，光有 user_id 查不出东西。
+--
+-- ★ 加入必须用「入班码」而不是「班级 id」：id 是内部标识，不该被学生看见和传播；
+--   入班码是老师可以写在黑板上、随时可换的凭证。
+CREATE TABLE IF NOT EXISTS classes (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  join_code     TEXT NOT NULL,          -- 入班码（6 位，去掉易混字符），唯一
+  owner_user_id TEXT NOT NULL,          -- 建班的人（老师/家长）
+  created_at    INTEGER NOT NULL,
+  archived_at   INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_classes_join_code ON classes(join_code);
+CREATE INDEX IF NOT EXISTS idx_classes_owner ON classes(owner_user_id);
+
+CREATE TABLE IF NOT EXISTS class_members (
+  class_id  TEXT NOT NULL,
+  user_id   TEXT NOT NULL,
+  space_id  TEXT NOT NULL,              -- 冗余：排行榜要按 (space_id,user_id) 取数据
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY (class_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_class_members_user ON class_members(user_id);
+
 -- 技能（P7 地基）
 CREATE TABLE IF NOT EXISTS skills (
   id            TEXT PRIMARY KEY,

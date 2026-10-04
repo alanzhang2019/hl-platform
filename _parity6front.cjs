@@ -66,12 +66,14 @@ const KB = kbBlock ? kbBlock[1] : '';
 ok('有上传入口（上传文档按钮）', KB.indexOf('上传文档') >= 0, null);
 
 // ---------- 4. 被砍掉的视图都还在，且挂进知识库 ----------
-group('D. 9 个功能全部收进知识库，没有一个丢掉');
-const SUBS = ['view-cards', 'view-exam', 'view-en', 'view-pool', 'view-projects',
+group('D. 功能全部收进知识库，没有一个丢掉');
+// ★ 批次28 加了「班级」（view-class）：班级榜是"激励自学"的场，从阶段1 就给，
+//   所以它既在后端 UNLOCKS 里、也在前端分区条上（`_parity7check.cjs` 双向校验这一点）。
+const SUBS = ['view-cards', 'view-exam', 'view-en', 'view-pool', 'view-class', 'view-projects',
   'view-dash', 'view-parent', 'view-skills', 'view-memory', 'view-settings'];
 const kbSubs = (KB.match(/<div class="kb-sub" id="([a-z-]+)"/g) || [])
   .map(s => /id="([a-z-]+)"/.exec(s)[1]);
-ok('知识库里有 11 个分区（含资料）', kbSubs.length === 11, kbSubs);
+ok('知识库里有 12 个分区（含资料）', kbSubs.length === 12, kbSubs);
 SUBS.forEach(id => ok('分区 ' + id + ' 在知识库里', kbSubs.indexOf(id) >= 0, kbSubs));
 ok('资料分区是 sub-docs', kbSubs.indexOf('sub-docs') >= 0, kbSubs);
 // 关键控件还在（这些 id 是各功能自己的入口，重构时最容易误删）
@@ -91,7 +93,7 @@ ok('app.js 里 meMenu 提供退出入口', /data-me="logout"/.test(APPJS), null)
 // ---------- 6. app.js 的结构常量 ----------
 group('F. app.js 的视图常量与旧引用清理');
 ok('TOP_VIEWS 只有 chat 与 kb', /const TOP_VIEWS = \['chat', 'kb'\]/.test(APPJS), null);
-ok('KB_SUBS 声明了 10 个分区', count(APPJS, /\{ key: '/g) >= 10, count(APPJS, /\{ key: '/g));
+ok('KB_SUBS 至少声明了 11 个分区（批次28 加了「班级」）', count(APPJS, /\{ key: '/g) >= 11, count(APPJS, /\{ key: '/g));
 ok('memory 分区标记为 hidden（不出现在分区条上）', /key: 'memory'[\s\S]{0,120}hidden: true/.test(APPJS), null);
 ok('settings 分区标记为 hidden（不出现在分区条上）', /key: 'settings'[\s\S]{0,120}hidden: true/.test(APPJS), null);
 ok('不再引用 #kbCats', APPJS.indexOf('#kbCats') < 0, null);

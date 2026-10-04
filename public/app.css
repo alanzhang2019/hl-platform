@@ -1461,6 +1461,60 @@ button { cursor: pointer; }
 .en4-rv-c { font-size: .7rem; color: var(--dim2); font-family: var(--mono); white-space: nowrap; }
 .en4-rv-q .inp { margin-bottom: 6px; }
 
+/* ================= 班级 + 班级排行榜（批次28）=================
+ * 全站唯一"把人排序"的地方。两条视觉纪律：
+ *   ① 0 分 / null 的人**不给名次**，显示「—」—— 不画"第 37 名"这种羞辱。
+ *   ② 只有「我」那一行描出来，别的行不强调 —— 榜单是给自己看进度的，不是给别人看的。
+ */
+.cls-wrap { display: flex; gap: 14px; align-items: flex-start; }
+.cls-list { width: 190px; flex: none; }
+.cls-list-h { font-size: .74rem; color: var(--dim2); padding: 0 4px 6px; }
+.cls-i { display: block; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-sm); padding: .55em .7em; margin-bottom: 6px; cursor: pointer; font: inherit; }
+.cls-i:hover { border-color: var(--line-2); }
+.cls-i.on { border-color: var(--pri); background: var(--pri-soft); }
+.cls-i-n { display: block; font-size: .88rem; color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cls-i-m { display: block; font-size: .72rem; color: var(--dim2); margin-top: 2px; }
+.cls-main { flex: 1; min-width: 0; }
+
+.cls-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.cls-head-l b { font-size: 1.02rem; }
+.cls-head-l span { display: block; font-size: .76rem; color: var(--dim2); margin-top: 2px; }
+.cls-code { display: flex; align-items: center; gap: 8px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); padding: .5em .7em; margin-bottom: 12px; background: var(--panel-2); }
+.cls-code span { font-size: .74rem; color: var(--dim2); }
+.cls-code b { font-family: var(--mono); font-size: 1.15rem; letter-spacing: .14em; color: var(--pri); }
+.cls-code i { font-style: normal; font-size: .72rem; color: var(--dim2); }
+
+.cls-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.cls-tab { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: .32em .85em; font: inherit; font-size: .8rem; color: var(--dim); cursor: pointer; }
+.cls-tab:hover { border-color: var(--line-2); color: var(--txt); }
+.cls-tab.on { border-color: var(--pri); background: var(--pri-soft); color: var(--pri); }
+.cls-hint { font-size: .74rem; color: var(--dim2); margin-bottom: 10px; }
+
+.cls-board { border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; background: var(--panel); }
+.cls-row { display: flex; align-items: center; gap: 10px; padding: .55em .8em; border-bottom: 1px solid var(--line); }
+.cls-row:last-child { border-bottom: 0; }
+.cls-row.me { background: var(--pri-soft); }
+.cls-row.off { opacity: .62; }
+.cls-rk { width: 2.1em; flex: none; text-align: right; font-family: var(--mono); font-size: .95rem; color: var(--dim); }
+.cls-row.me .cls-rk { color: var(--pri); }
+.cls-nm { flex: 1; min-width: 0; font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cls-nm i { font-style: normal; font-size: .68rem; color: var(--pri); border: 1px solid var(--pri); border-radius: 999px; padding: 0 5px; margin-left: 6px; }
+.cls-vl { font-family: var(--mono); font-size: .95rem; color: var(--txt); }
+.cls-na { font-family: inherit; font-size: .76rem; color: var(--dim2); }
+.cls-none, .cls-note, .cls-err { padding: .8em; font-size: .78rem; color: var(--dim2); }
+.cls-note { padding: .5em .8em 0; }
+.cls-err { color: var(--bad); }
+
+.cls-members { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cls-m-h { font-size: .74rem; color: var(--dim2); margin-right: 2px; }
+.cls-m { font-size: .78rem; color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: .15em .6em; }
+.cls-m.me { border-color: var(--pri); color: var(--pri); }
+
+.cls-empty { border: 1px dashed var(--line-2); border-radius: var(--r); padding: 2.2em 1.4em; text-align: center; background: var(--panel); }
+.cls-empty b { display: block; font-size: 1rem; margin-bottom: 6px; }
+.cls-empty span { display: block; font-size: .8rem; color: var(--dim2); max-width: 34em; margin: 0 auto; line-height: 1.7; }
+.cls-empty-btns { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
+
 /* ================= 顶栏响应式 =================
  * 窗口不够宽时让顶栏**换行**，而不是把标题压成竖排。
  * 单开 900px 而不是并进侧栏的 820px —— 侧栏停靠时（>820）主区反而更窄，
@@ -1494,6 +1548,11 @@ button { cursor: pointer; }
   .kb-tree-i { flex: 0 0 auto; border: 1px solid var(--line); padding: .3em .7em; }
   .kb-tabs { padding: 8px 12px 0; }
   .kb-subbar { padding: 8px 12px 4px; }
+  /* 班级：手机上"班级列表"横过来收成一条，别把榜单挤没 */
+  .cls-wrap { flex-direction: column; }
+  .cls-list { width: 100%; display: flex; gap: 6px; overflow-x: auto; }
+  .cls-list-h { display: none; }
+  .cls-i { flex: 0 0 auto; width: auto; margin-bottom: 0; }
   .me-chip .me-nm { display: none; }
 }
 

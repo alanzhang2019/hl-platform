@@ -835,6 +835,157 @@
     } catch (e) {}
   }
 
+  // ================= 班级 + 班级排行榜（批次28）=================
+  // ★ 这是全站**唯一**"把人排序"的地方，跟成长画像刻意分开：
+  //   画像说"你在哪一段、下一步看什么"（不排名）；这里说"和同班同学比，你推进到哪"。
+  // ★ 口径：只认**知识卡状态真的往前推**（pet.js 写的账本），不认在线时长 ——
+  //   挂着刷对话不产生任何分。详见 server/leaderboard.js 头部。
+  // ★ 字段名用 `id` 而不是 `key`：`_parity7check.cjs` 用 `/\{ key: '([a-z]+)'/g`
+  //   扫 app.js 抽出 KB_SUBS 的分区 key，再跟后端解锁表逐个对齐。这里若也叫 `key`，
+  //   三个指标名会被当成三个"分区"去后端找对应项，断言当场变红。
+  const CLS_METRICS = [
+    { id: 'understand', name: '累计推进', hint: '每次「知识卡真的往前推」累加的分。答错、没判出对错的都不计' },
+    { id: 'persist', name: '连续天数', hint: '最长连续多少天有推进。中间断一天就重新数' },
+    { id: 'progress', name: '本周变化', hint: '本周推进 − 上周推进，可以是负数。还没开始学的人不参与' },
+  ];
+  const CLS = { classes: [], curId: '', metric: 'understand', board: null, detail: null };
+
+  function clsMetric() { return CLS_METRICS.filter(m => m.id === CLS.metric)[0] || CLS_METRICS[0]; }
+  function clsCur() { return CLS.classes.filter(c => c.id === CLS.curId)[0] || null; }
+
+  async function loadClass() {
+    const main = $('#clsMain');
+    if (main && !CLS.curId) main.innerHTML = '<div class="skel" style="height:150px"></div>';
+    try {
+      const r = await api('/api/class');
+      CLS.classes = r.classes || [];
+    } catch (e) {
+      CLS.classes = [];
+      $('#clsList').innerHTML = '';
+      $('#clsMain').innerHTML = '<div class="cls-err">' + HL.esc(e.message || '读不到班级') + '</div>';
+      return;
+    }
+    // 选中的班没了（被解散 / 刚退出）就落回第一个
+    if (!CLS.classes.some(c => c.id === CLS.curId)) CLS.curId = CLS.classes.length ? CLS.classes[0].id : '';
+    renderClsList();
+    if (!CLS.curId) { renderClsEmpty(); return; }
+    await loadBoard();
+  }
+
+  function renderClsList() {
+    const box = $('#clsList');
+    if (!CLS.classes.length) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div class="cls-list-h">我参与的班级</div>' + CLS.classes.map(c =>
+      '<button class="cls-i' + (c.id === CLS.curId ? ' on' : '') + '" data-id="' + HL.esc(c.id) + '" type="button">' +
+        '<span class="cls-i-n">' + HL.esc(c.name) + '</span>' +
+        '<span class="cls-i-m">' + (c.isOwner ? '我建的 · ' : '') + c.memberCount + ' 人</span>' +
+      '</button>').join('');
+  }
+
+  function renderClsEmpty() {
+    $('#clsMain').innerHTML =
+      '<div class="cls-empty">' +
+        '<b>还没有班级</b>' +
+        '<span>老师建一个班，把 6 位入班码念给同学；同学输码就能进来。排行榜只在班内可见，外面看不到。</span>' +
+        '<div class="cls-empty-btns">' +
+          '<button class="btn primary" data-act="new" type="button">+ 建一个班</button>' +
+          '<button class="btn" data-act="join" type="button">输入入班码</button>' +
+        '</div>' +
+      '</div>';
+  }
+
+  async function loadBoard() {
+    const main = $('#clsMain');
+    main.innerHTML = '<div class="skel" style="height:180px"></div>';
+    try {
+      const rs = await Promise.all([
+        api('/api/leaderboard?classId=' + encodeURIComponent(CLS.curId) + '&metric=' + CLS.metric),
+        api('/api/class/detail?classId=' + encodeURIComponent(CLS.curId)),
+      ]);
+      CLS.board = rs[0].board;
+      CLS.detail = rs[1];
+      main.innerHTML = renderBoard();
+    } catch (e) {
+      main.innerHTML = '<div class="cls-err">' + HL.esc(e.message || '读不到排行榜') + '</div>';
+    }
+  }
+
+  /**
+   * 排行榜。
+   * ★ 0 分（或 null）的人**不给名次**，显示为「—」—— 给一个还没开始的人发"第 37 名"
+   *   是羞辱不是激励。前端也不许把 null 显示成 0（null 是"还没开始"，0 是"确实没推进"）。
+   */
+  function renderBoard() {
+    const b = CLS.board, d = CLS.detail || { members: [] }, c = clsCur() || {};
+    const meId = (S.me && S.me.profile && S.me.profile.id) || '';
+    const m = clsMetric();
+
+    const tabs = CLS_METRICS.map(x =>
+      '<button class="cls-tab' + (x.id === CLS.metric ? ' on' : '') + '" data-metric="' + x.id + '" type="button">' +
+        HL.esc(x.name) + '</button>').join('');
+
+    const rows = (b.entries || []).map(e => {
+      const v = e[CLS.metric];
+      const na = (v === null || v === undefined);
+      return '<div class="cls-row' + (e.userId === meId ? ' me' : '') + (e.rank === null ? ' off' : '') + '">' +
+        '<span class="cls-rk">' + (e.rank === null ? '—' : e.rank) + '</span>' +
+        '<span class="cls-nm">' + HL.esc(e.name) + (e.userId === meId ? '<i>我</i>' : '') + '</span>' +
+        '<span class="cls-vl">' + (na ? '<span class="cls-na">还没开始</span>' : String(v)) + '</span>' +
+      '</div>';
+    }).join('') || '<div class="cls-none">这个班还没有同学</div>';
+
+    // 有成绩的排完了，剩下的是"还没开始"那一段 —— 明确标出来，别让人以为是并列第 0 名
+    const tail = (b.scoredCount || 0) < (b.memberCount || 0)
+      ? '<div class="cls-note">「—」是还没有任何推进的同学，不排名次 —— 排了也只是在说他还没开始。</div>' : '';
+
+    const code = c.joinCode
+      ? '<div class="cls-code"><span>入班码</span><b>' + HL.esc(c.joinCode) + '</b>' +
+        '<button class="btn ghost sm" data-act="copycode" data-code="' + HL.esc(c.joinCode) + '" type="button">复制</button>' +
+        '<i>念给同学，或写在黑板上</i></div>'
+      : '';
+
+    const members = (d.members || []).map(x =>
+      '<span class="cls-m' + (x.userId === meId ? ' me' : '') + '">' + HL.esc(x.name) + '</span>').join('');
+
+    return '' +
+      '<div class="cls-head">' +
+        '<div class="cls-head-l"><b>' + HL.esc(b.className) + '</b>' +
+          '<span>' + b.memberCount + ' 位同学 · 本周从 ' + fmtDate(b.weekStart) + ' 起算</span></div>' +
+        '<div class="sp"></div>' +
+        (c.isOwner
+          ? '<button class="btn ghost sm" data-act="archive" type="button">解散班级</button>'
+          : '<button class="btn ghost sm" data-act="leave" type="button">退出班级</button>') +
+      '</div>' +
+      code +
+      '<div class="cls-tabs">' + tabs + '</div>' +
+      '<div class="cls-hint">' + HL.esc(m.hint) + '</div>' +
+      '<div class="cls-board">' + rows + '</div>' +
+      tail +
+      (members ? '<div class="cls-members"><span class="cls-m-h">班级成员</span>' + members + '</div>' : '');
+  }
+
+  async function clsNew() {
+    const name = prompt('给这个班起个名字（比如「五年级三班」）');
+    if (name === null) return;
+    try {
+      const r = await api('/api/class', { method: 'POST', body: { name } });
+      CLS.curId = r['class'].id;
+      toast('建好了，把入班码念给同学');
+      await loadClass();
+    } catch (e) { toast(e.message); }
+  }
+
+  async function clsJoin() {
+    const code = prompt('输入老师给的 6 位入班码');
+    if (code === null) return;
+    try {
+      const r = await api('/api/class/join', { method: 'POST', body: { code } });
+      CLS.curId = r['class'].id;
+      toast(r.already ? '你已经在班里了' : '加入成功');
+      await loadClass();
+    } catch (e) { toast(e.message); }
+  }
+
   // ---------- 视图切换 ----------
   // ★ 顶级只有两根：对话 / 知识库。
   //   其余功能不再是平级导航，而是知识库里的二级分区（KB_SUBS）。
@@ -847,6 +998,7 @@
     { key: 'exam', id: 'view-exam', name: '测评', hint: '题从你收下的知识卡里出，做完的每一题都会回到复习队列', load: () => loadExams() },
     { key: 'en', id: 'view-en', name: '英语', hint: '单词本 + 听写', load: () => loadEn() },
     { key: 'pool', id: 'view-pool', name: '共享池', hint: '同学之间互相给的学习资料，取用是复制进自己空间', load: () => loadPool() },
+    { key: 'class', id: 'view-class', name: '班级', hint: '和同班同学一起看谁在往前推。看的是「推进」，不是在线时长', load: () => loadClass() },
     { key: 'projects', id: 'view-projects', name: '项目', hint: '一个项目 = 一组资料 + 一条学习指令', load: () => loadProjects() },
     { key: 'dash', id: 'view-dash', name: '看板', hint: '先看清楚做了什么，再决定补哪里', load: () => loadDash() },
     { key: 'parent', id: 'view-parent', name: '家长视角', hint: '同一批事实，换一个"我能做什么"的问法', load: () => loadParent() },
@@ -6357,6 +6509,35 @@
       const dl = ev.target.closest('[data-delw]');
       if (dl) {
         try { await api('/api/english/words/' + dl.dataset.delw, { method: 'DELETE' }); loadEn(); toast('已删除'); }
+        catch (e) { toast(e.message); }
+      }
+    });
+
+    // 班级 + 班级排行榜（批次28）
+    // ★ 委托挂在稳定的父容器 #view-class 上：班级列表与榜单都是动态重建的，
+    //   挂到 #clsList / #clsMain 上会在第一次重建后失效（本项目踩过 #dailyBox 的坑）。
+    $('#clsNewBtn').addEventListener('click', clsNew);
+    $('#clsJoinBtn').addEventListener('click', clsJoin);
+    $('#view-class').addEventListener('click', async ev => {
+      const mi = ev.target.closest('.cls-tab[data-metric]');
+      if (mi) { CLS.metric = mi.dataset.metric; await loadBoard(); return; }
+      const ci = ev.target.closest('.cls-i[data-id]');
+      if (ci) { CLS.curId = ci.dataset.id; renderClsList(); await loadBoard(); return; }
+      const act = ev.target.closest('[data-act]');
+      if (!act) return;
+      const a = act.dataset.act;
+      if (a === 'new') { clsNew(); return; }
+      if (a === 'join') { clsJoin(); return; }
+      if (a === 'copycode') { copyText(act.dataset.code || ''); toast('入班码已复制'); return; }
+      if (a === 'leave') {
+        if (!confirm('退出这个班？退出后你就看不到这个班的榜单了，已经攒的推进分不会消失。')) return;
+        try { await api('/api/class/leave', { method: 'POST', body: { classId: CLS.curId } }); toast('已退出'); await loadClass(); }
+        catch (e) { toast(e.message); }
+        return;
+      }
+      if (a === 'archive') {
+        if (!confirm('解散这个班？解散后同学都看不到这个班了（已经攒的推进分不会消失，也不会被删掉）。')) return;
+        try { await api('/api/class/archive', { method: 'POST', body: { classId: CLS.curId } }); toast('已解散'); await loadClass(); }
         catch (e) { toast(e.message); }
       }
     });

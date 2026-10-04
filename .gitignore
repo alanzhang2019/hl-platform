@@ -23,6 +23,9 @@ data/
 *.sqlite
 *.sqlite3
 
+# 反证套件的并发锁（正常跑完会自动删；崩溃残留时不该进仓库）
+.leaderboardnegative.lock
+
 # ---- 测试与截图产物 ----
 _shots*/
 _probe-out/
