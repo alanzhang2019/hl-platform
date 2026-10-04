@@ -1377,7 +1377,7 @@ function listAgents(spaceId, opts) {
 // ============================================================
 const MODEL_TAGS = {
   default: { tag: '通用', tip: '日常对话与讲解，响应快' },
-  deep: { tag: '深度思考', tip: '复杂难题拆解，慢一点但更稳' },
+  deep: { tag: 'DeepSeek Pro', tip: '复杂难题拆解，先想清楚再答，慢一点但更稳' },
 };
 
 function listModels() {

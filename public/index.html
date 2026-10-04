@@ -241,11 +241,8 @@
             <option value="feynman">费曼学习法</option>
             <option value="diagnosis">学情诊断</option>
           </select>
-          <label class="tb-chk" title="AI 优先用图表、流程图、几何图形等可视化方式回复">
-            <input type="checkbox" id="vizChk"> 图表模式
-          </label>
-          <select class="sel" id="modelSel" title="模型"></select>
-          <button class="btn ghost sm" id="agentBtn" type="button" title="选择 AI 助手">智能体</button>
+          <!-- 模型选择器与图表模式已挪到输入区工具栏（见 composer-tools）。
+               学习模式留在顶栏：它是"这段对话怎么教"的长期设定，不是随手切的参数。 -->
           <button class="btn ghost sm" id="shareBtn" type="button">分享</button>
           <button class="btn ghost sm" id="convMenuBtn" type="button" title="更多操作">⋯</button>
         </div>
@@ -306,9 +303,40 @@
         <div class="temp-docs" id="tempDocs" hidden></div>
         <div class="attach-preview" id="attachPreview" hidden></div>
         <div class="composer-tools">
-          <button class="ct" id="attachBtn" type="button" title="上传图片或文档（也可直接 Ctrl+V 粘贴、或把文件拖进来）">＋</button>
+          <!-- ＋：一个以「＋」为入口的动作菜单（添加文件 / 引用对话中的文件 / 智能体）。
+               以前这里是个直连文件选择器的按钮，智能体按钮在顶栏 —— 现在都收进这个菜单，
+               输入区成为唯一需要伸手的地方。 -->
+          <div class="plus-wrap">
+            <button class="ct ct-plus" id="plusBtn" type="button" aria-haspopup="menu"
+                    aria-expanded="false" title="添加内容或选择智能体（也可直接 Ctrl+V 粘贴图片、或把文件拖进来）">＋</button>
+            <div class="plus-menu" id="plusMenu" role="menu" hidden>
+              <button class="pm-i" type="button" role="menuitem" id="pmAddFile">
+                <span class="pm-ic"><svg viewBox="0 0 24 24" width="17" height="17" fill="none"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                </svg></span><span class="pm-tx">添加文件</span><span class="pm-ar">›</span>
+              </button>
+              <button class="pm-i" type="button" role="menuitem" id="pmRefFile">
+                <span class="pm-ic"><svg viewBox="0 0 24 24" width="17" height="17" fill="none"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/>
+                </svg></span><span class="pm-tx">引用对话中的文件</span><span class="pm-ar">›</span>
+              </button>
+              <div class="pm-sep"></div>
+              <button class="pm-i" type="button" role="menuitem" id="pmAgent">
+                <span class="pm-ic"><svg viewBox="0 0 24 24" width="17" height="17" fill="none"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4M9 13h.01M15 13h.01M9 17h6"/>
+                </svg></span><span class="pm-tx">智能体</span><span class="pm-ar">›</span>
+              </button>
+            </div>
+          </div>
           <input type="file" id="attachFile" multiple hidden>
-          <button class="ct" id="dtBtn" type="button" title="开启深度思考：难题先想清楚再答，慢一点但更稳">深度思考</button>
+          <!-- 模型选择器 + 图表模式：从顶栏挪到输入区，聊天时随手可切 -->
+          <select class="sel ct-sel" id="modelSel" title="选择模型"></select>
+          <label class="tb-chk ct-chk" title="AI 优先用图表、流程图、几何图形等可视化方式回复">
+            <input type="checkbox" id="vizChk"> 图表模式
+          </label>
           <button class="ct" id="webBtn" type="button" title="开启联网搜索：适合查最新资讯">联网搜索</button>
           <button class="ct" id="ttsBtn" type="button" title="朗读设置">朗读</button>
           <span class="grow"></span>

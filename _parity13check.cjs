@@ -290,7 +290,9 @@ const neverFetch = () => { throw new Error('不该发起请求'); };
     ok(has(APPJS, '没读到'), '失败文案：N 个链接没读到 + 原因');
     ok(has(APPJS, '正在打开你发的链接'), '★ 抓取期间给一行等待说明（干等几秒最像卡死）');
     ok(has(INDEXHTML, '可直接粘贴图片'), '输入框 placeholder 提了一句可粘贴');
-    ok(has(INDEXHTML, 'Ctrl+V'), '「＋」按钮的 title 里写了可以粘贴/拖拽');
+    // ★ 批次31：上传入口从"直连文件选择器的 ＋ 按钮"变成"＋ 菜单 → 添加文件"，
+    //   但"还能粘贴/拖拽"这句提示必须在，否则用户不知道不用点菜单也能传。
+    ok(has(INDEXHTML, 'Ctrl+V'), '「＋」入口的 title 里写了可以粘贴/拖拽');
   }
 
   console.log('\n批次13（粘贴上传 + AI 读链接）：');

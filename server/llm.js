@@ -15,16 +15,25 @@ const LLM_MODEL = process.env.LLM_MODEL || 'deepseek-chat';
 const MOCK = !LLM_API_KEY || LLM_API_KEY === 'mock';
 
 // 模型注册表。id 是前端传的值，model 是上游真实模型名。
+//
+// ★★ thinking 是**显式开关**，不是"这个模型会不会思考"的描述。
+//   上游 v4 系（flash / pro）**默认就带思考**：实测同一句 "12+7=?"，
+//   不传 thinking 时 flash 也照样回一段 reasoning_content。
+//   于是"关掉深度思考"曾经关不掉 —— 按钮灭了，思考过程照旧冒出来。
+//   正解是每条请求都**明确**带上 thinking.type：
+//     快速档 ⇒ disabled（让它别想，直接答）
+//     深度档 ⇒ enabled （让它想，思考过程给前端看）
+//   ⚠️ 不要把 thinking 从请求里省掉，省掉 = 回到上游默认 = 又关不掉。
 const MODELS = [
   {
-    id: 'default', name: '通用', displayName: process.env.LLM_MODEL_NAME || 'DeepSeek',
+    id: 'default', name: 'DeepSeek', displayName: process.env.LLM_MODEL_NAME || 'DeepSeek',
     provider: 'deepseek', color: '#2563EB', model: LLM_MODEL,
-    desc: '日常对话与讲解，响应快',
+    desc: '日常对话与讲解，响应快', thinking: false,
   },
   {
-    id: 'deep', name: '深度思考', displayName: '深度思考模式',
+    id: 'deep', name: 'DeepSeek Pro', displayName: 'DeepSeek Pro',
     provider: 'deepseek', color: '#7C3AED', model: process.env.LLM_MODEL_DEEP || LLM_MODEL,
-    desc: '复杂问题拆解，慢一点但更稳', thinking: true,
+    desc: '复杂问题拆解，先想清楚再答，慢一点但更稳', thinking: true,
   },
 ];
 
@@ -363,7 +372,12 @@ function mockStream(messages) {
 async function* streamChat({ messages, model, onReasoning }) {
   const m = resolveModel(model);
   if (MOCK) { yield* mockStream(messages); return; }
-  const body = { model: m.model, messages, stream: true, temperature: 0.6 };
+  // ★ 显式声明要不要思考。省略这个字段 = 听上游的默认（v4 系默认为"要"），
+  //   那"关闭深度思考"就形同虚设。见 MODELS 上方注释。
+  const body = {
+    model: m.model, messages, stream: true, temperature: 0.6,
+    thinking: { type: m.thinking ? 'enabled' : 'disabled' },
+  };
   const res = await fetchWithRetry(LLM_BASE_URL + '/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + LLM_API_KEY },
@@ -410,7 +424,13 @@ async function complete({ messages, model, temperature }) {
   const res = await fetchWithRetry(LLM_BASE_URL + '/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + LLM_API_KEY },
-    body: JSON.stringify({ model: m.model, messages, stream: false, temperature: temperature == null ? 0.3 : temperature }),
+    // 非流式调用都是后台杂活（起标题、抽知识卡、判分）——**明确关掉思考**：
+    // 这些任务不要推理过程，白等一段 reasoning 只是拖慢后台。见 MODELS 上方注释。
+    body: JSON.stringify({
+      model: m.model, messages, stream: false,
+      temperature: temperature == null ? 0.3 : temperature,
+      thinking: { type: 'disabled' },
+    }),
   });
   if (!res.ok) throw new Error('模型接口返回 ' + res.status);
   const j = await res.json();

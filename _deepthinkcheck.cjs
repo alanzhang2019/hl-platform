@@ -98,37 +98,43 @@ ok('占位消息 meta 落库 deepThink（看板要能统计成本口径）',
   /mode: useMode,[\s\S]{0,300}deepThink: deepThink/.test(SR));
 
 // ============================================================
-group('D 前端：按钮在「联网搜索」旁边');
+group('D 前端：模型入口在输入区工具栏（批次31 改版）');
 
-ok('index.html 有 dtBtn 按钮', /id="dtBtn"/.test(HTML));
-ok('★ dtBtn 紧邻 webBtn（要求"放在联网旁边"）', (() => {
-  const i = HTML.indexOf('id="dtBtn"');
-  const j = HTML.indexOf('id="webBtn"');
-  if (i < 0 || j < 0) return false;
-  // dtBtn 在 webBtn 前面，且中间只隔一个标签的量级
-  return i < j && (j - i) < 200;
+ok('★ 模型选择器在输入区工具栏（.composer-tools 内）', (() => {
+  const i = HTML.indexOf('class="composer-tools"');
+  if (i < 0) return false;
+  const seg = HTML.slice(i, i + 3000);
+  return /id="modelSel"/.test(seg);
 })());
-ok('dtBtn 也是 .ct 类（与联网同款工具条按钮）', /class="ct"\s+id="dtBtn"/.test(HTML));
-ok('dtBtn 有 title 说明（悬停能看懂它做什么）', /id="dtBtn"[^>]*title="[^"]*深度思考/.test(HTML));
+ok('★ 图表模式也在输入区工具栏', (() => {
+  const i = HTML.indexOf('class="composer-tools"');
+  if (i < 0) return false;
+  const seg = HTML.slice(i, i + 3000);
+  return /id="vizChk"/.test(seg);
+})());
+ok('★ 顶栏不再有第二处模型入口（避免两处不同步）', (() => {
+  const i = HTML.indexOf('class="tb-tools"');
+  if (i < 0) return false;
+  const seg = HTML.slice(i, i + 1400);
+  return !/id="modelSel"/.test(seg) && !/id="vizChk"/.test(seg);
+})());
+ok('  旧的「深度思考」按钮已移除（并进模型下拉）', !/id="dtBtn"/.test(HTML));
+ok('  旧的顶栏智能体按钮已移除（收进 ＋ 菜单）', !/id="agentBtn"/.test(HTML));
 
 // ============================================================
 group('E 前端：状态、渲染、切换三件套');
 
 ok('S 状态里有 deepThink', /deepThink:\s*false,/.test(APPJS));
 ok('有 renderDtBtn', /function renderDtBtn\(\)/.test(APPJS));
-ok('有 setDeepThink', /async function setDeepThink\(/.test(APPJS));
-ok('有 toggleDeepThink', /function toggleDeepThink\(/.test(APPJS));
 ok('★ renderDtBtn 的开关态从 S.model 推导（单一真相，不另存一份）',
-  /function renderDtBtn\(\)[\s\S]{0,300}S\.model === 'deep'/.test(APPJS));
+  /function renderDtBtn\(\)[\s\S]{0,500}S\.model === 'deep'/.test(APPJS));
+ok('  已删掉 setDeepThink/toggleDeepThink（按钮没了，别再留死代码）',
+  !/function setDeepThink\(/.test(APPJS) && !/function toggleDeepThink\(/.test(APPJS));
 
 // ============================================================
-group('F ★★ 两入口双向同步（点按钮同步下拉，切下拉同步按钮）');
+group('F ★★ 档位与 deepThink 双向一致');
 
-ok('★ setDeepThink 里改完 S.model 会同步顶栏下拉',
-  /async function setDeepThink\([\s\S]{0,500}\$\('#modelSel'\)/.test(APPJS));
-ok('★ setDeepThink 里会调 renderDtBtn 刷新按钮态',
-  /async function setDeepThink\([\s\S]{0,600}renderDtBtn\(\)/.test(APPJS));
-ok('★ modelSel 的 change 里也会调 renderDtBtn（切下拉要同步按钮）', (() => {
+ok('★ modelSel 的 change 里会调 renderDtBtn（切档要同步 deepThink）', (() => {
   const i = APPJS.indexOf("$('#modelSel').addEventListener('change'");
   if (i < 0) return false;
   const seg = APPJS.slice(i, i + 900);
@@ -140,47 +146,56 @@ ok('★ 切下拉时会把 deepThink 一起 PATCH（两字段同时落库，状�
   const seg = APPJS.slice(i, i + 900);
   return /deepThink:\s*S\.model === 'deep'/.test(seg);
 })());
-ok('★ setDeepThink 落库时 model 与 deepThink 一起写', (() => {
-  const i = APPJS.indexOf('async function setDeepThink(');
+ok('★ openConv 打开旧对话时会刷新档位态（renderDtBtn 被调用）', (() => {
+  const i = APPJS.indexOf('async function openConv(');
   if (i < 0) return false;
-  const seg = APPJS.slice(i, i + 900);
-  return /body:\s*\{\s*deepThink[\s\S]{0,80}model:\s*S\.model/.test(seg);
+  const seg = APPJS.slice(i, i + 2500);
+  return /renderDtBtn\(\)/.test(seg);
+})());
+ok('newConv 会 renderDtBtn（新建对话档位态不残留）', (() => {
+  const i = APPJS.indexOf('S.webSearch = false; S.pending = []; S.tempDocs = [];');
+  if (i < 0) return false;
+  const seg = APPJS.slice(i, i + 600);
+  return /renderDtBtn\(\)/.test(seg);
 })());
 
 // ============================================================
 group('G ★ 接线必须真的存在（钉调用点，不是"字符串存在"）');
 
-ok('★★ dtBtn 真的绑了 click（定义了但没人调 = 本项目出过的 bug）',
-  /\$\('#dtBtn'\)\.addEventListener\('click',\s*toggleDeepThink\)/.test(APPJS));
 ok('★ 发送请求体里带上 deepThink', (() => {
   const i = APPJS.indexOf('/api/chat/stream');
   if (i < 0) return false;
   const seg = APPJS.slice(i, i + 1500);
   return /deepThink:\s*!!S\.deepThink/.test(seg);
 })());
-ok('★ openConv 打开旧对话时会刷新按钮态（renderDtBtn 被调用）', (() => {
-  const i = APPJS.indexOf('async function openConv(');
-  if (i < 0) return false;
-  const seg = APPJS.slice(i, i + 2500);
-  return /renderDtBtn\(\)/.test(seg);
-})());
-ok('★ 启动流程里同步了一次按钮态（刷新后界面与 S.model 一致）', (() => {
-  const i = APPJS.indexOf('setMode(savedMode()');
-  if (i < 0) return false;
-  const seg = APPJS.slice(i, i + 600);
-  return /renderDtBtn\(\)/.test(seg);
-})());
-ok('newConv 会 renderDtBtn（新建对话按钮态不残留）', (() => {
-  const i = APPJS.indexOf('S.webSearch = false; S.pending = []; S.tempDocs = [];');
-  if (i < 0) return false;
-  const seg = APPJS.slice(i, i + 600);
-  return /renderDtBtn\(\)/.test(seg);
-})());
 ok('★ 新建对话不重置深度思考（它是档位偏好，不是每对话一次的开关）', (() => {
   const i = APPJS.indexOf('S.webSearch = false; S.pending = []; S.tempDocs = [];');
   if (i < 0) return false;
   const seg = APPJS.slice(i, i + 700);
   return !/S\.deepThink = false/.test(seg);
+})());
+
+// ============================================================
+group('G2 ★★ ＋ 菜单的三项都真的接了线（定义了但没人调 = 本项目出过的 bug）');
+
+ok('★★ bindPlusMenu 真的被调用（否则菜单点了没反应）',
+  /bindPlusMenu\(\);/.test(APPJS));
+ok('★★ 「添加文件」真的绑了 click 并唤起文件选择器', (() => {
+  const i = APPJS.indexOf("$('#pmAddFile').addEventListener('click'");
+  if (i < 0) return false;
+  return /\$\('#attachFile'\)\.click\(\)/.test(APPJS.slice(i, i + 160));
+})());
+ok('★★ 「引用对话中的文件」真的绑了 click 并弹自己的面板',
+  /\$\('#pmRefFile'\)\.addEventListener\('click',\s*\(\)\s*=>\s*\{[^}]*openRefFileMenu\(\)/.test(APPJS));
+ok('★★ 「智能体」真的绑了 click 并复用 openAgents',
+  /\$\('#pmAgent'\)\.addEventListener\('click',\s*\(\)\s*=>\s*\{[^}]*openAgents\(\)/.test(APPJS));
+ok('★ 点空白处会关菜单（否则菜单会一直挂在屏幕上）',
+  /document\.addEventListener\('click',[\s\S]{0,220}closePlusMenu\(\)/.test(APPJS));
+ok('★ 引用文件是把文件名插进输入框（不是把整篇内容塞进上下文）', (() => {
+  const i = APPJS.indexOf('function openRefFileMenu(');
+  if (i < 0) return false;
+  const seg = APPJS.slice(i, i + 2000);
+  return /ta\.value\s*=[\s\S]{0,120}'@'\s*\+\s*name/.test(seg);
 })());
 ok('对话副标题会写明深度思考已开（用户能看出来当前档位）',
   /深度思考已开/.test(APPJS));
@@ -189,11 +204,31 @@ ok('对话副标题会写明深度思考已开（用户能看出来当前档位�
 group('H 与既有 deep 档位的口径一致（不是新造一套）');
 
 ok('llm.js 里 deep 档位确实存在且 thinking=true',
-  /id:\s*'deep'[\s\S]{0,220}thinking:\s*true/.test(LLMJS));
+  /id:\s*'deep'[\s\S]{0,260}thinking:\s*true/.test(LLMJS));
 ok('★ 深度思考复用 deep 档位，不是新造第三个模型 id',
   /'deep'/.test(APPJS) && !/'deepthink'/i.test(APPJS));
 ok('switchView/其它地方没有把 deepThink 写成对象或数组（应是布尔）',
   !/deepThink:\s*\[/.test(APPJS) && !/deepThink:\s*\{/.test(APPJS));
+
+// ============================================================
+group('I ★★★ 批次31：thinking 必须显式下发（否则"关不掉"）');
+
+// 事故：通用档模型 deepseek-v4-flash **默认就带思考**，不传 thinking 时
+// 也照样回 reasoning_content —— 于是"关掉深度思考"按钮灭了、思考过程照旧。
+// 修法是每条请求都显式带 thinking.type。
+ok('★★★ 档位定义里 default 显式 thinking=false',
+  /id:\s*'default',[\s\S]{0,300}?thinking:\s*false/.test(LLMJS));
+ok('★★★ streamChat 按档位传 thinking:enabled/disabled',
+  /thinking:\s*\{\s*type:\s*m\.thinking\s*\?\s*'enabled'\s*:\s*'disabled'\s*\}/.test(LLMJS));
+ok('★★ complete（后台杂活）显式关思考，不白等推理',
+  /thinking:\s*\{\s*type:\s*'disabled'\s*\}/.test(LLMJS));
+ok('★★ 前端收到没要的 reasoning 会丢弃（wantThink 兜底）',
+  /if\s*\(!wantThink\)/.test(APPJS));
+ok('★ meta 回来会用服务端裁决校正 wantThink',
+  /if\s*\(j\.deepThink !== undefined\)\s*wantThink = !!j\.deepThink/.test(APPJS));
+ok('★ deep 档在界面上叫 DeepSeek Pro（不再叫「深度思考」）',
+  /id:\s*'deep'[\s\S]{0,160}?name:\s*'DeepSeek Pro'/.test(LLMJS) &&
+  !/id:\s*'deep'[\s\S]{0,160}?name:\s*'深度思考'/.test(LLMJS));
 
 // ============================================================
 console.log('\n' + '─'.repeat(62));

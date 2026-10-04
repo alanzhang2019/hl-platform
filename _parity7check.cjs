@@ -220,8 +220,16 @@ ok('点遮罩关闭抽屉', /#sideMask'\)\.addEventListener\('click'/.test(APPJS
 // 结构：次级控件被包进 .tb-tools
 const tbTools = /<div class="tb-tools">([\s\S]*?)<\/div>/.exec(HTML);
 ok('对话页顶栏有 .tb-tools 容器', !!tbTools, null);
-['modeSel', 'modelSel', 'agentBtn', 'shareBtn', 'convMenuBtn'].forEach(id => {
+// ★ 批次31 起，顶栏这组只剩「长期设定 + 分享/更多」：
+//   modelSel 与 vizChk 挪进了输入区工具栏（聊天时随手切），
+//   agentBtn 收进了输入区的「＋」菜单 —— 所以它们**不该**再出现在 .tb-tools 里。
+['modeSel', 'shareBtn', 'convMenuBtn'].forEach(id => {
   ok('#' + id + ' 被收进 .tb-tools', !!tbTools && tbTools[1].indexOf('id="' + id + '"') >= 0, null);
+});
+// 反向锁：挪走的三个不能再留在顶栏，否则就是"两处入口"（必然不同步）
+['modelSel', 'vizChk', 'agentBtn'].forEach(id => {
+  ok('#' + id + ' 已不在 .tb-tools（批次31 挪进输入区）',
+    !!tbTools && tbTools[1].indexOf('id="' + id + '"') < 0, null);
 });
 ok('#kbSearch 不再有内联 max-width（内联样式盖不过媒体查询）',
   !/id="kbSearch"[^>]*style=/.test(HTML), null);

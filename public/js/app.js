@@ -1820,6 +1820,10 @@
     let acc = '';
     let rAcc = '';             // 思考过程（reasoning_content）累积
     let thinkCollapsed = false;
+    // 这一条请求有没有要「想」。服务端现在会按档位显式开关 thinking（见 llm.js），
+    // 正常不会再有"没开却收到 reasoning"；这里再挡一道 —— 万一上游又改了默认行为，
+    // 至少界面上不会冒出用户没要的思考过程。（服务端回 meta 时会校正这个值。）
+    let wantThink = !!S.deepThink;
     let replyId = '';
     let expectingArt = null;   // 服务端推了 art 事件 = 这条会有配图，画完才落库
     try {
@@ -1884,6 +1888,9 @@
             replyId = j.replyId || '';
             currentReply = replyId;
             a.data.id = replyId;
+            // ★ 服务端是档位与开关的最终裁决者（它按 deepThink 算 model）。
+            //   以它回的值校正本地的"要不要思考"，两边不可能再不一致。
+            if (j.deepThink !== undefined) wantThink = !!j.deepThink;
             if (j.webSearch) {
               const tag = (j.webSearch.ok && (j.webSearch.results || []).length)
                 ? '联网搜索' + (j.webSearch.query ? '「' + j.webSearch.query + '」' : '') + '：找到 ' + j.webSearch.results.length + ' 条网页'
@@ -1897,13 +1904,18 @@
             }
           } else if (ev === 'reasoning') {
             // 思考过程先于正文流出。展开跟随，让学生看见"它在想"。
-            rAcc += j.text || '';
-            const t = ensureThink(a, true);
-            if (t) {
-              t.querySelector('.rsn-bd').textContent = rAcc;
-              t.scrollTop = t.scrollHeight;
+            // ★ 没要思考就直接丢弃：上游偶发无视 thinking:disabled 时，
+            //   这里兜住，避免"开关关着却冒思考过程"的怪界面。
+            if (!wantThink) { /* 丢 */ }
+            else {
+              rAcc += j.text || '';
+              const t = ensureThink(a, true);
+              if (t) {
+                t.querySelector('.rsn-bd').textContent = rAcc;
+                t.scrollTop = t.scrollHeight;
+              }
+              scrollBottom();
             }
-            scrollBottom();
           } else if (ev === 'delta') {
             // 正文一开始就把思考过程收起来（展开着会把答案顶到屏幕外）；
             // 面板留在原处，学生想看随时点开。
@@ -2220,11 +2232,19 @@
     const a = (S.agents || []).filter(x => x.id === id)[0];
     return a ? a.name : id;
   }
+  /**
+   * 智能体入口的状态渲染（批次31）。
+   * ★ 顶栏那个"智能体"按钮已随本次改版移除，入口收进「＋」菜单。
+   *   所以这里改为把**当前选中的智能体名字**显示在菜单项右侧 —— 否则菜单里
+   *   三项永远长一样，用户选完助手再打开菜单看不出"已经选了谁"。
+   */
   function renderAgentBtn() {
-    const b = $('#agentBtn');
-    if (!b) return;
-    b.textContent = S.agentId ? ('智能体 · ' + agentName(S.agentId)) : '智能体';
-    b.classList.toggle('on', !!S.agentId);
+    const tx = $('#pmAgent .pm-tx');
+    if (!tx) return;
+    const on = !!S.agentId;
+    tx.textContent = on ? ('智能体 · ' + agentName(S.agentId)) : '智能体';
+    const item = $('#pmAgent');
+    if (item) item.classList.toggle('on', on);
   }
   function renderWebBtn() {
     const b = $('#webBtn');
@@ -2232,36 +2252,101 @@
     b.classList.toggle('on', !!S.webSearch);
     b.textContent = S.webSearch ? '联网搜索 · 开' : '联网搜索';
   }
+
   /**
-   * 深度思考开关的渲染。
-   * ★ 它的"开/关"不存自己的一份状态，而是**读 S.model**（是否 deep 档）——
-   *   顶栏模型下拉和这个按钮是同一个状态的两个人性化入口，分开存必然会出现
-   *   "下拉切回通用、按钮还亮着"这种自相矛盾的界面。
+   * 输入区的「＋」动作菜单（批次31）。
+   *
+   * 三项：添加文件 / 引用对话中的文件 / 智能体。
+   * ★ 第三项直接复用已有的 openAgents()（选择 AI 助手弹窗）——
+   *   顶栏那个"智能体"按钮已随本次改版移除，入口只有这一个，不存在两处不同步。
+   * ★ 关菜单用 **document 级捕获监听**：菜单里的按钮点下去会先冒泡到 document，
+   *   若只在按钮上监听，点"添加文件"时菜单还没来得及关就已经触发文件选择框了。
+   *   用 `closest` 判断点击是否落在菜单/按钮内 —— 落在里面交给各自的处理器。
    */
-  function renderDtBtn() {
-    const b = $('#dtBtn');
-    if (!b) return;
-    const on = S.model === 'deep';
-    S.deepThink = on;
-    b.classList.toggle('on', on);
-    b.textContent = on ? '深度思考 · 开' : '深度思考';
+  function plusMenuOpen() {
+    const m = $('#plusMenu');
+    return !!(m && !m.hidden);
+  }
+  function closePlusMenu() {
+    const m = $('#plusMenu'), b = $('#plusBtn');
+    if (m) m.hidden = true;
+    if (b) { b.classList.remove('on'); b.setAttribute('aria-expanded', 'false'); }
+  }
+  function bindPlusMenu() {
+    const btn = $('#plusBtn'), menu = $('#plusMenu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const open = plusMenuOpen();
+      if (open) { closePlusMenu(); return; }
+      menu.hidden = false;
+      btn.classList.add('on');
+      btn.setAttribute('aria-expanded', 'true');
+      // 菜单靠右会顶出屏幕时自动改右对齐（输入区在窄屏下很窄）
+      menu.classList.remove('r');
+      const r = menu.getBoundingClientRect();
+      if (r.right > window.innerWidth - 8) menu.classList.add('r');
+    });
+    $('#pmAddFile').addEventListener('click', () => { closePlusMenu(); $('#attachFile').click(); });
+    $('#pmRefFile').addEventListener('click', () => { closePlusMenu(); openRefFileMenu(); });
+    $('#pmAgent').addEventListener('click', () => { closePlusMenu(); openAgents(); });
+    document.addEventListener('click', e => {
+      if (!plusMenuOpen()) return;
+      if (e.target.closest('#plusMenu') || e.target.closest('#plusBtn')) return;
+      closePlusMenu();
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closePlusMenu(); });
+  }
+
+  /**
+   * 「引用对话中的文件」——列出这段对话里已经上传过的资料（临时资料 + 附件），
+   * 点一下就把它的名字插进输入框，形成 @ 引用。
+   *
+   * ★ 为什么不做成"整篇内容塞进上下文"：那会瞬间吃光 context 且用户看不见成本。
+   *   这里只插入 `@文件名`，真正的取用交给服务端的引用解析 —— 与既有的
+   *   「本次对话的资料」是同一套数据（S.tempDocs），不新造一份清单。
+   */
+  function openRefFileMenu() {
+    const docs = (S.tempDocs || []).filter(d => d.status !== 'failed');
+    if (!docs.length) {
+      toast('这段对话里还没有可引用的文件，先用「添加文件」传一个吧');
+      return;
+    }
+    openModal('引用对话中的文件',
+      '<p class="dim ag-tip">点一下把文件名插进输入框。' +
+      '<b>只引用你点的那份</b>，不会把整段对话的资料一股脑塞进去。</p>' +
+      '<div class="ag-list" id="rfList">' + docs.map(d =>
+        '<button class="ag-i" data-rf="' + esc(d.filename) + '" type="button">' +
+        '<b>' + esc(d.filename) + '</b>' +
+        '<span>' + (d.status === 'parsing' ? '正在识别文字' : '已就绪，可以引用') + '</span></button>').join('') +
+      '</div>');
+    $('#rfList').addEventListener('click', ev => {
+      const b = ev.target.closest('[data-rf]'); if (!b) return;
+      const name = b.getAttribute('data-rf');
+      const ta = $('#input');
+      const cur = ta.value;
+      ta.value = (cur ? cur.replace(/\s*$/, ' ') : '') + '@' + name + ' ';
+      ta.focus();
+      // 把光标放到末尾，不然插完还要手动点到结尾
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      closeModal();
+      toast('已引用「' + name + '」');
+    });
   }
   /**
-   * 设定深度思考开关。on=true 走 deep 档，false 回 default 档。
-   * 三处一起改：内存 S.model → 顶栏下拉 → 会话 PATCH。漏任何一处都会让
-   * 界面显示与实际请求不一致（本项目踩过"模式存在但没生效"的坑）。
+   * 深度思考开关的渲染。
+   *
+   * ★ 自批次31 起，**界面上的"深度思考"按钮已经不在了** —— 它改名成
+   *   「DeepSeek Pro」，并作为一个选项进了输入区的模型下拉。用户不再需要理解
+   *   "开关 vs 模型"这层映射，直接选模型即可。
+   *
+   * 但 S.deepThink 这个状态还留着，因为它承载两件仍然必要的事：
+   *   1) 发给服务端的请求体里要带（服务端用它算档位，优先级最高）
+   *   2) 决定前端要不要渲染思考过程面板
+   * 它的唯一真源仍然是 **S.model 是不是 deep 档**，不另存一份，避免自相矛盾。
    */
-  async function setDeepThink(on) {
-    S.model = on ? 'deep' : 'default';
-    const sel = $('#modelSel');
-    if (sel && sel.value !== S.model) sel.value = S.model;
-    renderDtBtn();
-    if (S.convId) {
-      // deepThink 与 model 一起 PATCH：服务端两条路都认（见 server.js streamReply），
-      // 但状态本身要保持一致，所以两个字段同时写。
-      try { await api('/api/conversations/' + S.convId, { method: 'PATCH', body: { deepThink: !!on, model: S.model } }); } catch (e) {}
-    }
-    toast(on ? '深度思考已开启：难题会先想清楚再答，慢一点但更稳' : '已关闭深度思考：恢复快速回答');
+  function renderDtBtn() {
+    S.deepThink = S.model === 'deep';
   }
   async function loadAgents() {
     try {
@@ -2326,10 +2411,6 @@
       try { await api('/api/conversations/' + S.convId, { method: 'PATCH', body: { webSearch: S.webSearch } }); } catch (e) {}
     }
     toast(S.webSearch ? '开启联网搜索：适合查最新资讯' : '已关闭联网搜索');
-  }
-
-  async function toggleDeepThink() {
-    return setDeepThink(S.model !== 'deep');
   }
 
   function openConvMenu() {
@@ -6100,12 +6181,10 @@
     $('#send').addEventListener('click', send);
     $('#stop').addEventListener('click', stopStream);
     $('#sideToggle').addEventListener('click', toggleSide);
-    $('#agentBtn').addEventListener('click', openAgents);
     $('#convMenuBtn').addEventListener('click', openConvMenu);
     $('#webBtn').addEventListener('click', toggleWeb);
-    $('#dtBtn').addEventListener('click', toggleDeepThink);
     $('#ttsBtn').addEventListener('click', openTtsSettings);
-    $('#attachBtn').addEventListener('click', () => $('#attachFile').click());
+    bindPlusMenu();
     $('#attachFile').addEventListener('change', async e => {
       await pickAttach(e.target.files);
       e.target.value = '';

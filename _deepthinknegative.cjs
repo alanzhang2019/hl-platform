@@ -18,7 +18,7 @@ const { execFileSync } = require('child_process');
 
 const ROOT = __dirname;
 const LOCK = path.join(ROOT, '.deepthinknegative.lock');
-const FILES = ['server.js', 'server/core.js', 'server/db.js', 'public/js/app.js', 'public/index.html']
+const FILES = ['server.js', 'server/core.js', 'server/db.js', 'server/llm.js', 'public/js/app.js', 'public/index.html']
   .map(f => path.join(ROOT, f));
 
 // ---------- ① 开局快照 ----------
@@ -113,26 +113,26 @@ negate('② streamReply 不解析 deepThink（本次请求的开关被忽略）'
 //   ★ 但错误写法在语法上要成立，所以改成"读一个恒 false 的字段"来模拟
 negate('③ renderDtBtn 不再从 S.model 推导（两入口会打架）',
   'public/js/app.js',
-  "    const on = S.model === 'deep';\n    S.deepThink = on;",
-  "    const on = !!S.deepThink && S.model !== '';");
+  "    S.deepThink = S.model === 'deep';",
+  "    S.deepThink = !!S.deepThink && S.model !== '';");
 
-// 反证 4：setDeepThink 不刷新顶栏下拉（点按钮后下拉还是旧档位）
-negate('④ setDeepThink 不同步顶栏下拉（界面自相矛盾）',
+// 反证 4：modelSel 切档时不 PATCH 会话（切了刷新就回旧档）
+negate('④ 切档不落库（刷新后回到旧档位）',
   'public/js/app.js',
-  "    const sel = $('#modelSel');\n    if (sel && sel.value !== S.model) sel.value = S.model;",
-  "    const sel = null;\n    if (sel && sel.value !== S.model) sel.value = S.model;");
+  "        api('/api/conversations/' + S.convId, {\n          method: 'PATCH', body: { model: S.model, deepThink: S.model === 'deep' },\n        }).catch(() => {});",
+  "        // (反证：故意不落库)");
 
-// 反证 5：modelSel 的 change 不调 renderDtBtn（切下拉后按钮态是旧的）
-negate('⑤ 切顶栏下拉不刷新按钮态',
+// 反证 5：modelSel 的 change 不调 renderDtBtn（切档后 deepThink 是旧值）
+negate('⑤ 切档不刷新 deepThink（发送时带的是旧档）',
   'public/js/app.js',
-  "      // ★ 顶栏下拉切到/切离 deep 档时，深度思考按钮要跟着亮/灭 ——\n      //   两者是同一个状态，不同步就是自相矛盾的界面。\n      renderDtBtn();",
-  "      // (反证：故意不同步)");
+  "      S.model = e.target.value;\n      const m = (S.models || []).filter(x => x.id === S.model)[0];\n      toast(m && m.desc ? m.desc : '已切换模型');\n      // ★ 顶栏下拉切到/切离 deep 档时，深度思考按钮要跟着亮/灭 ——\n      //   两者是同一个状态，不同步就是自相矛盾的界面。\n      renderDtBtn();",
+  "      S.model = e.target.value;\n      const m = (S.models || []).filter(x => x.id === S.model)[0];\n      toast(m && m.desc ? m.desc : '已切换模型');");
 
-// 反证 6：dtBtn 没绑 click（定义了但没人调 —— 本项目真出过的 bug）
-negate('⑥ dtBtn 没绑 click（按钮点了没反应）',
+// 反证 6：＋ 菜单没绑点击（菜单点了没反应 —— 本项目真出过的"定义了没人调"）
+negate('⑥ ＋ 菜单项没绑 click（点了没反应）',
   'public/js/app.js',
-  "    $('#dtBtn').addEventListener('click', toggleDeepThink);",
-  "    // (反证：故意不绑)");
+  "    $('#pmAddFile').addEventListener('click', () => { closePlusMenu(); $('#attachFile').click(); });",
+  "    // (反证：故意不绑添加文件)");
 
 // 反证 7：发送时不带 deepThink（开关永远传不到服务端）
 negate('⑦ 发送请求不带 deepThink',
@@ -161,11 +161,18 @@ negate('⑩ 没有 deep_think 迁移（老库缺列）',
   "  ['conversations', 'deep_think', 'INTEGER NOT NULL DEFAULT 0'],",
   "  // (反证：故意删掉迁移)");
 
-// 反证 11：按钮不在联网旁边（放到别处去）
-negate('⑪ 按钮被放到联网后面（不在"旁边"）',
+// 反证 11：模型选择器挪出输入区（回到顶栏 → 与"挪进聊天窗口"的要求相反）
+negate('⑪ 模型选择器不在输入区工具栏（回到顶栏）',
   'public/index.html',
-  '          <button class="ct" id="dtBtn" type="button" title="开启深度思考：难题先想清楚再答，慢一点但更稳">深度思考</button>\n          <button class="ct" id="webBtn" type="button" title="开启联网搜索：适合查最新资讯">联网搜索</button>',
-  '          <button class="ct" id="webBtn" type="button" title="开启联网搜索：适合查最新资讯">联网搜索</button>\n          <span style="display:none">' + 'x'.repeat(300) + '</span>\n          <button class="ct" id="dtBtn" type="button" title="开启深度思考：难题先想清楚再答，慢一点但更稳">深度思考</button>');
+  '          <select class="sel ct-sel" id="modelSel" title="选择模型"></select>',
+  '          <span style="display:none">' + 'x'.repeat(2100) + '</span>\n          <select class="sel ct-sel" id="modelSel" title="选择模型"></select>');
+
+// 反证 12：★★★ 批次31 的核心 —— streamChat 不显式传 thinking
+//   后果：上游 v4 系默认就带思考，「关闭深度思考」形同虚设（本次真实事故）
+negate('⑫ streamChat 不显式下发 thinking（关不掉思考过程）',
+  'server/llm.js',
+  "    thinking: { type: m.thinking ? 'enabled' : 'disabled' },",
+  "    // (反证：省略 thinking，回到上游默认 = 关不掉)");
 
 // ============================================================
 console.log('深度思考反证：' + cases.length + ' 处\n');
