@@ -4,7 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>后浪学习平台</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%232563EB'/><path d='M9 20c3-8 11-8 14 0' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round'/></svg>">
+<!-- ★ 品牌图标：后浪的浪形（蓝渐变 + 浪尖一点光）。
+     用真实 PNG 而不是内联 SVG —— 内联那份是早期的占位圆点，和品牌图形无关。
+     apple-touch-icon 给 iOS 加到桌面用，32/64 给浏览器标签页。 -->
+<link rel="icon" type="image/png" sizes="32x32" href="/img/icon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/img/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/img/icon-180.png">
 <script>
 /* 首屏防闪色：在样式表之前同步恢复主题与字号，避免白屏跳变 */
 (function () {
@@ -27,7 +32,11 @@
          为什么不做成全屏 hero：我们的落地页是**功能入口**，不是营销页。
          学生打开它是为了立刻开始，不是来听我们讲理念的 —— 讲一句就够了。 -->
     <header class="land-head">
-      <div class="land-logo">后浪奔涌</div>
+      <div class="land-logo">
+        <img class="land-logo-img" src="/img/logo.png" srcset="/img/logo.png 1x, /img/logo@2x.png 2x"
+             alt="" width="720" height="372" decoding="async">
+        <span class="land-logo-word">后浪奔涌</span>
+      </div>
       <div class="land-sub">AI 学习平台 · 自学立身，创造立世</div>
       <p class="land-stance">不直接给答案 —— 陪你把自己想不明白的地方想明白。</p>
     </header>
@@ -171,6 +180,8 @@
          一个 268px 宽的侧栏，顶部四分之一用来放"你叫什么、几级了"，不划算。
          空间名在「我的」chip 上一直可见，ID 与等级点开就有。 -->
     <div class="brand">
+      <img class="brand-logo" src="/img/logo.png" srcset="/img/logo.png 1x, /img/logo@2x.png 2x"
+           alt="后浪学习平台" width="720" height="372" decoding="async">
       <b>后浪奔涌</b>
       <small>AI 学习平台</small>
     </div>

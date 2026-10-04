@@ -139,6 +139,37 @@ async function feedPetToTop(page) {
   ok('主界面此时隐藏', !(await page.locator('#app').isVisible()));
   ok('品牌名渲染', (await page.locator('.land-logo').innerText()).indexOf('后浪') >= 0);
 
+  // ---------- 1.1b 品牌图形（批次29 加） ----------
+  group('1.1b 品牌 logo（浪形图）');
+  // ★ 断言"图**真的解码出来**了"，不是只断言 <img> 标签存在 ——
+  //   路径写错 / PNG 损坏时 <img> 仍在 DOM 里，只是 naturalWidth=0，
+  //   页面上就是一块空白，而标签断言全绿。必须查 naturalWidth。
+  const lg = await page.evaluate(() => {
+    const img = document.querySelector('.land-logo-img');
+    if (!img) return null;
+    return { nat: img.naturalWidth, natH: img.naturalHeight, done: img.complete, alt: img.alt };
+  });
+  ok('★ 落地页 logo <img> 存在', !!lg);
+  ok('★★ logo 真的解码出来了（naturalWidth>0，不是坏图）', !!(lg && lg.done && lg.nat > 0), lg);
+  ok('logo 用了 2x 源（srcset 有 @2x）',
+    await page.evaluate(() => { const i = document.querySelector('.land-logo-img'); return !!(i && /@2x/.test(i.getAttribute('srcset') || '')); }));
+  ok('logo 有 alt（可访问性）', !!(lg && lg.alt !== null));
+  // favicon 换成真实 PNG，不再是内联 SVG 占位
+  const fav = await page.evaluate(() => ({
+    href: (document.querySelector('link[rel="icon"]') || {}).href || '',
+    apple: (document.querySelector('link[rel="apple-touch-icon"]') || {}).href || '',
+  }));
+  ok('favicon 指向 /img/icon-32.png（已换掉内联 SVG 占位）', /\/img\/icon-32\.png$/.test(fav.href), fav.href);
+  ok('apple-touch-icon 已配置（iOS 加桌面要用）', /\/img\/icon-180\.png$/.test(fav.apple), fav.apple);
+  // 图标文件真的能取到（200），不是 404 回落到空白
+  const iconsOk = await page.evaluate(async () => {
+    const urls = ['/img/icon-32.png', '/img/icon-192.png', '/img/icon-180.png', '/img/logo.png'];
+    const out = {};
+    for (const u of urls) { try { const r = await fetch(u, { method: 'GET' }); out[u] = r.status; } catch (e) { out[u] = 'ERR'; } }
+    return out;
+  });
+  ok('★ 四个图标资源都返回 200', Object.values(iconsOk).every(v => v === 200), iconsOk);
+
   // ---------- 1.1 批次9：合规入口与第一屏抬头 ----------
   group('1.1 落地页合规入口（批次9）');
 
@@ -214,10 +245,15 @@ async function feedPetToTop(page) {
   await page.click('#spCreate');
   await page.waitForSelector('#app', { state: 'visible', timeout: 8000 });
   ok('创建后进入主界面', await page.locator('#app').isVisible());
-  const spName = await page.locator('#spaceName').innerText();
-  ok('侧栏显示姓名', spName === NAME, spName);
-  const idChip = await page.locator('#spaceIdChip').innerText();
-  ok('姓名下方显示空间 ID', /^ID：\d{4}$/.test(idChip), idChip);
+  // ★ 这里原本断言 `#spaceName` / `#spaceIdChip` —— 那两个元素在侧栏改版时已被移除
+  //   （空间名搬到了右上角「我的」chip，ID 与等级点开才有，见 index.html 里那段注释）。
+  //   元素没了，locator.innerText 会**干等 30 秒然后抛异常**，整个套件从这里断掉、
+  //   后面 30 多组一条都跑不到 —— 看着像"页面坏了"，其实是**测试自己过期了**。
+  //   ⇒ 改成断言改版后真实存在的东西。判断"谁是谁"靠品牌字，ID 靠顶栏 chip。
+  const brandWord = await page.locator('.brand > b').innerText();
+  ok('侧栏品牌字渲染', brandWord.indexOf('后浪') >= 0, brandWord);
+  const meChipOk = await page.locator('.me-chip').first().isVisible();
+  ok('右上角「我的」chip 可见（空间名/ID 现在在这里）', meChipOk);
   // ★ `#app` 可见 ≠ 首屏渲染完。
   //   enterApp() 先把 #app 显示出来，再 await 9 个并行加载，最后才 renderStreamEmpty()。
   //   这台机器（磁盘接近写满）一次 API 调用要 1–9 秒，boot 全程 8 秒 ——

@@ -171,6 +171,11 @@ button { cursor: pointer; }
 }
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.99); } to { opacity: 1; transform: none; } }
 .land-logo {
+  display: flex; align-items: center; gap: 12px;
+}
+/* ★ 品牌图形：浪形 + 浪尖一点光。宽度收着点，别抢了「后浪奔涌」四个字的视线。 */
+.land-logo-img { width: 68px; height: auto; flex: none; }
+.land-logo-word {
   font-size: 1.85rem; font-weight: 700; letter-spacing: .04em;
   background: linear-gradient(120deg, var(--pri), #0EA5E9 70%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
@@ -239,6 +244,9 @@ button { cursor: pointer; }
 /* 侧栏顶部只留品牌名 —— 空间卡 / 成长条 / 公告已收进右上角「我的」菜单
    （2026-10-04）。原来那块占 190px 竖向空间，而项目与对话列表才是学生天天在用的。 */
 .brand { padding: 16px 16px 13px; border-bottom: 1px solid var(--line); }
+/* ★ 侧栏品牌图形：高度压到 26px —— 这里寸土寸金（268px 宽的侧栏，
+   顶部每一像素都要让给项目/对话列表）。图形只做识别，不做主角。 */
+.brand-logo { display: block; width: auto; height: 26px; margin-bottom: 7px; }
 .brand > b { font-size: 1.05rem; font-weight: 700; letter-spacing: .02em; }
 .brand > small { display: block; color: var(--dim2); font-size: .72rem; margin-top: 1px; }
 /* .pet-line 的基准样式保留：成长条现在渲染在「我的」菜单里，用的是同一个类。 */
@@ -1596,7 +1604,9 @@ button { cursor: pointer; }
   /* 落地页抬头：手机上压缩，别让"我们是谁"把表单顶出首屏 */
   .land { padding: 18px 14px; }
   .land-head { margin-bottom: 14px; }
-  .land-logo { font-size: 1.5rem; }
+  .land-logo { gap: 9px; }
+  .land-logo-img { width: 48px; }
+  .land-logo-word { font-size: 1.5rem; }
   .land-stance { margin-top: 8px; font-size: .8rem; }
   .topbar { padding: 10px 12px; gap: 8px; }
   .topbar .sel { max-width: 92px; }
@@ -1876,6 +1886,8 @@ button { cursor: pointer; }
 .app.side-min .side-h #newConv { display: none; }
 .app.side-min .brand { padding: 16px 8px 10px; text-align: center; }
 .app.side-min .brand > b { font-size: .82rem; }
+/* ★ 侧栏收起时留图形、去掉图形上的下边距：66px 宽的栏里再留空隙会显得空一截 */
+.app.side-min .brand-logo { height: 30px; margin: 0 auto 4px; }
 .app.side-min .nav { padding: 8px 6px; }
 .app.side-min .nav-i { justify-content: center; padding: .6em 0; font-size: 1rem; }
 .app.side-min .conv-i { justify-content: center; }
