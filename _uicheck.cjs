@@ -131,6 +131,10 @@ function startServer() {
   ok('有 2 个档位', sel.opts.length === 2, sel.opts);
   ok('★ 第二档显示 DeepSeek Pro（不再叫"深度思考"）',
     /DeepSeek Pro/.test(sel.opts[1] ? sel.opts[1].t : '') && !/深度思考/.test(sel.opts[1] ? sel.opts[1].t : ''), sel.opts[1]);
+  ok('★★ 标签不重复（不能出现"DeepSeek Pro · DeepSeek Pro"）',
+    !/DeepSeek Pro\s*·\s*DeepSeek Pro/.test(sel.opts[1] ? sel.opts[1].t : ''), sel.opts[1]);
+  ok('★ 两个档位文案互不相同（下拉里能区分）',
+    sel.opts[0] && sel.opts[1] && sel.opts[0].t !== sel.opts[1].t, sel.opts);
   await page.screenshot({ path: path.join(OUT, '02-toolbar.png') });
 
   // ---- 4. 选 DeepSeek Pro ----

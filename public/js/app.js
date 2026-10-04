@@ -825,9 +825,15 @@
       const r = await fetch('/api/models').then(x => x.json());
       S.models = r.models || [];
       const sel = $('#modelSel');
-      sel.innerHTML = S.models.map(m =>
-        '<option value="' + HL.esc(m.id) + '" title="' + HL.esc(m.desc || '') + '">' +
-        HL.esc(m.tag || m.name) + ' · ' + HL.esc(m.displayName || m.name) + '</option>').join('');
+      // ★ 标签与型号可能同名（如 DeepSeek Pro 档的 tag 与 displayName 都是
+      //   "DeepSeek Pro"），直接拼会渲染成"DeepSeek Pro · DeepSeek Pro"。
+      //   两边一样时只显示一次。
+      sel.innerHTML = S.models.map(m => {
+        const a = m.tag || m.name, b = m.displayName || m.name;
+        const label = (a === b) ? a : (a + ' · ' + b);
+        return '<option value="' + HL.esc(m.id) + '" title="' + HL.esc(m.desc || '') + '">' +
+          HL.esc(label) + '</option>';
+      }).join('');
       if (S.models.length) S.model = S.models[0].id;
     } catch (e) {}
   }

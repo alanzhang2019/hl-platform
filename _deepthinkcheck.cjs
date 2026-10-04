@@ -197,6 +197,16 @@ ok('★ 引用文件是把文件名插进输入框（不是把整篇内容塞进
   const seg = APPJS.slice(i, i + 2000);
   return /ta\.value\s*=[\s\S]{0,120}'@'\s*\+\s*name/.test(seg);
 })());
+
+// ============================================================
+group('G3 ★ 模型下拉标签不重复（tag 与 displayName 同名时只显示一次）');
+
+// 事故：deep 档的 tag 与 displayName 都叫「DeepSeek Pro」，
+// 旧写法 `tag + ' · ' + displayName` 会渲染成「DeepSeek Pro · DeepSeek Pro」。
+ok('★★ loadModels 里对同名做了去重（a === b 分支）',
+  /async function loadModels\([\s\S]{0,900}?a === b/.test(APPJS));
+ok('★ 不再直接拼 `tag + \' · \' + displayName`',
+  !/m\.tag \|\| m\.name\)\s*\+\s*' · '\s*\+\s*HL\.esc\(m\.displayName/.test(APPJS));
 ok('对话副标题会写明深度思考已开（用户能看出来当前档位）',
   /深度思考已开/.test(APPJS));
 
