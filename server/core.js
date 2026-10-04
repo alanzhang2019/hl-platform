@@ -98,19 +98,20 @@ function listConversations(spaceId, { projectId, favorite, q } = {}) {
   return D.all(sql, ...p).map(c => ({
     id: c.id, title: c.title, projectId: c.project_id, model: c.model,
     agentId: c.agent_id || '', webSearch: !!c.web_search, mode: normMode(c.mode),
+    deepThink: !!c.deep_think,
     isFavorite: !!c.is_favorite, instructions: c.instructions,
     createdAt: c.created_at, updatedAt: c.updated_at,
     messageCount: (D.get('SELECT COUNT(*) c FROM messages WHERE conversation_id = ? AND deleted = 0', c.id) || {}).c || 0,
   }));
 }
 
-function createConversation(spaceId, userId, { title, projectId, model, instructions, agentId, webSearch, mode } = {}) {
+function createConversation(spaceId, userId, { title, projectId, model, instructions, agentId, webSearch, deepThink, mode } = {}) {
   const id = D.uid('c_');
-  D.run(`INSERT INTO conversations(id,space_id,user_id,project_id,title,model,instructions,agent_id,web_search,mode,created_at,updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+  D.run(`INSERT INTO conversations(id,space_id,user_id,project_id,title,model,instructions,agent_id,web_search,deep_think,mode,created_at,updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, spaceId, userId || null, projectId || null,
     String(title || '新对话').slice(0, 60), String(model || 'default'), String(instructions || '').slice(0, 2000),
-    agentId || null, webSearch ? 1 : 0, normMode(mode), D.now(), D.now());
+    agentId || null, webSearch ? 1 : 0, deepThink ? 1 : 0, normMode(mode), D.now(), D.now());
   logActivity(spaceId, userId, 'chat', id);
   return getConversation(spaceId, id);
 }
@@ -122,6 +123,7 @@ function getConversation(spaceId, id) {
     id: c.id, title: c.title, projectId: c.project_id, model: c.model,
     instructions: c.instructions, isFavorite: !!c.is_favorite,
     agentId: c.agent_id || '', webSearch: !!c.web_search,
+    deepThink: !!c.deep_think,
     mode: normMode(c.mode),
     createdAt: c.created_at, updatedAt: c.updated_at,
   };
@@ -137,6 +139,7 @@ function updateConversation(spaceId, id, patch) {
   if (patch.projectId !== undefined) D.run('UPDATE conversations SET project_id = ? WHERE id = ?', patch.projectId || null, id);
   if (patch.agentId !== undefined) D.run('UPDATE conversations SET agent_id = ? WHERE id = ?', patch.agentId || null, id);
   if (patch.webSearch !== undefined) D.run('UPDATE conversations SET web_search = ? WHERE id = ?', patch.webSearch ? 1 : 0, id);
+  if (patch.deepThink !== undefined) D.run('UPDATE conversations SET deep_think = ? WHERE id = ?', patch.deepThink ? 1 : 0, id);
   if (patch.mode !== undefined) D.run('UPDATE conversations SET mode = ? WHERE id = ?', normMode(patch.mode), id);
   D.run('UPDATE conversations SET updated_at = ? WHERE id = ?', D.now(), id);
   return getConversation(spaceId, id);

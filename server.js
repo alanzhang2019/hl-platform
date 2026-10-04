@@ -183,7 +183,15 @@ const STOP_FLAGS = new Set();
  */
 async function streamReply(req, res, ctx, sid, opt) {
   const conv = opt.conv;
-  const model = opt.model || conv.model || 'default';
+  // 深度思考开关 → 模型档位。
+  // ★ 开关就是"这条对话走哪个档位"的一个人性化入口，不新造第三套模型机制：
+  //   开 = deep 档（llm.js 的 MODELS 里那个，会旁路 reasoning_content 折叠展示），
+  //   关 = 用本次请求/会话上存的档位。
+  //   ★ 优先级是 **deepThink > opt.model > conv.model**，不是 opt.model 优先 ——
+  //     因为 regenerate 这类分支会把 conv.model 显式传进来（那时的值可能是 default），
+  //     若让 opt.model 抢先，开关就被静默绕过了。开了就是开了，不接受被覆盖。
+  const deepThink = opt.deepThink !== undefined ? !!opt.deepThink : !!conv.deepThink;
+  const model = deepThink ? 'deep' : (opt.model || conv.model || 'default');
 
   // 附件与文本一起存进用户消息 —— 这样刷新页面还能看到"当时发的是哪张图"
   const userMsg = opt.skipUserMessage ? null : core.addMessage(sid, conv.id, {
@@ -337,6 +345,9 @@ async function streamReply(req, res, ctx, sid, opt) {
       // mode 落库：以前只进 prompt 不落库，管理员看板想统计"自学/引导/深研"
       // 用了多少完全无从下手。写在这里，历史数据缺失的那段由看板如实标成 untracked。
       mode: useMode,
+      // 本条回复实际走的档位（深度思考开关决定）。落库是为了让管理员看板能统计
+      // 「有多少条回答是深度思考产出的」—— 这是成本口径，改完不看数等于没改。
+      deepThink: deepThink,
       sources: docCtx.hits.map(h => ({ docId: h.docId, filename: h.filename, chunk: h.chunkIndex, score: h.score })),
       agentId: conv.agentId || '',
       skills: skills.enabledIds(sid),
@@ -360,6 +371,7 @@ async function streamReply(req, res, ctx, sid, opt) {
     messageId: userMsg ? userMsg.id : null,
     replyId: placeholder.id,
     model: model,
+    deepThink: deepThink,
     agentId: conv.agentId || '',
     skills: skills.enabledIds(sid),
     webSearch: searchRes ? { ok: searchRes.ok, query: searchRes.query || '', message: searchRes.message || '', results: (searchRes.results || []).slice(0, 5) } : null,
@@ -1014,13 +1026,14 @@ async function handleApi(req, res, u) {
     let conv = b.conversationId ? core.getConversation(sid, b.conversationId) : null;
     if (!conv) conv = core.createConversation(sid, ctx.userId, {
       projectId: b.projectId, model: b.model, agentId: b.agentId, webSearch: b.webSearch,
-      mode: b.mode,
+      deepThink: b.deepThink, mode: b.mode,
     });
-    // 会话级设置随每次发送同步（前端改了模型/智能体/联网开关/学习模式，服务端要跟上）
+    // 会话级设置随每次发送同步（前端改了模型/智能体/联网开关/深度思考/学习模式，服务端要跟上）
     const patch = {};
     if (b.model) patch.model = b.model;
     if (b.agentId !== undefined) patch.agentId = b.agentId;
     if (b.webSearch !== undefined) patch.webSearch = b.webSearch;
+    if (b.deepThink !== undefined) patch.deepThink = b.deepThink;
     if (b.mode !== undefined) patch.mode = b.mode;
     if (Object.keys(patch).length) conv = core.updateConversation(sid, conv.id, patch);
 
@@ -1029,6 +1042,8 @@ async function handleApi(req, res, u) {
       // ★ 模式优先取本次请求带的，其次取会话上存的 —— 前端漏传时不该悄悄退回默认模式
       mode: b.mode || conv.mode, skillIds: b.skillIds, attachments: atts,
       clientId: b.clientId, webSearch: b.webSearch !== undefined ? !!b.webSearch : !!conv.webSearch,
+      // ★ 同样兜底：本次请求 → 会话 → 关。漏传一次就悄悄换档位是最难查的那类 bug。
+      deepThink: b.deepThink !== undefined ? !!b.deepThink : !!conv.deepThink,
       visualize: b.visualize,
       body: b,
     });
@@ -1086,7 +1101,7 @@ async function handleApi(req, res, u) {
       return streamReply(req, res, ctx, sid, {
         conv: conv, text: (lastUser && lastUser.content) || '', model: b.model || conv.model,
         mode: b.mode || conv.mode, skillIds: b.skillIds, skipUserMessage: true,
-        webSearch: !!conv.webSearch, visualize: b.visualize, body: b,
+        webSearch: !!conv.webSearch, deepThink: !!conv.deepThink, visualize: b.visualize, body: b,
       });
     }
   }

@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   instructions TEXT NOT NULL DEFAULT '',   -- 对话级自定义指令（"设置指令"）
   agent_id     TEXT,                       -- 选中的智能体（映射到能力中心的技能）
   web_search   INTEGER NOT NULL DEFAULT 0, -- 联网搜索开关
+  deep_think   INTEGER NOT NULL DEFAULT 0, -- 深度思考开关（开 = 走 deep 模型档位）
   mode         TEXT NOT NULL DEFAULT 'selfstudy', -- 学习模式（自学引导/费曼/学情诊断）
   is_favorite  INTEGER NOT NULL DEFAULT 0,
   created_at   INTEGER NOT NULL,
@@ -555,6 +556,12 @@ const MIGRATIONS = [
   // 对话级设置：智能体 + 联网搜索
   ['conversations', 'agent_id', 'TEXT'],
   ['conversations', 'web_search', 'INTEGER NOT NULL DEFAULT 0'],
+  // 深度思考开关。放在输入框旁边与「联网搜索」并列，一键即可切换。
+  // ★ 它**不是**第三套模型机制 —— 开 = 让这条对话走 `deep` 模型档位
+  //   （llm.js 的 MODELS 里那个，顺带把 reasoning_content 旁路出来折叠展示），
+  //   关 = 回 `default` 档位。所以它和顶栏的模型下拉是**同一个状态**的两个入口，
+  //   前端用 S.model 做单一真相、双向同步（详见 app.js 的 setDeepThink）。
+  ['conversations', 'deep_think', 'INTEGER NOT NULL DEFAULT 0'],
   // 学习模式（自学引导 / 费曼学习法 / 学情诊断）。
   // ★ 以前模式只跟着**单次请求**走，不落会话也不落前端持久化 ——
   //   刷新页面选择器就回到「自学引导」，用户以为还在「费曼学习法」，

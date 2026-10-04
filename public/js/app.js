@@ -57,6 +57,7 @@
     agents: [],            // 智能体清单（= 能力中心的技能）
     agentId: '',           // 当前对话选中的智能体
     webSearch: false,      // 联网搜索开关
+    deepThink: false,      // 深度思考开关（开 = 本条对话走 deep 模型档位）
     tempDocs: [],          // 对话级临时资料
     pending: [],           // 待发送附件（图片）
     tts: { rate: 1, maxChars: 5000 },
@@ -795,6 +796,9 @@
     // 先把选择器同步到本地记住的模式。不做这一步的话，刷新后 S.mode 是记住的值、
     // 而选择器还停在 HTML 默认的「自学引导」—— 界面显示的和实际生效的对不上。
     setMode(savedMode(), { silent: true });
+    // 同理：深度思考按钮的亮灭必须由 S.model 推导一次，否则刷新后按钮停在
+    // HTML 默认的「关」，而 S.model 可能已经是 deep —— 同上，界面与实际对不上。
+    renderDtBtn();
     // 刷新后不要落在空白对话上——那看起来像"东西丢了"。
     // 有历史就直接接上最近一条（openConv 会把那条对话自己的模式恢复回来），
     // 没有才显示引导语。
@@ -1827,6 +1831,9 @@
         body: JSON.stringify({
           text: text, conversationId: S.convId || undefined, mode: S.mode, model: S.model,
           agentId: S.agentId || undefined, webSearch: S.webSearch, visualize: S.visualize || undefined,
+          // 深度思考：与 model 一起传。服务端以 deepThink 为准决定档位（见 streamReply），
+          // 但 model 也要传 —— 关掉开关的那一刻，界面要立刻回到用户选的档位。
+          deepThink: !!S.deepThink,
           // 新对话时把「待归入的项目」一起带上：会话是服务端在收到首条消息时才创建的，
           // 漏了这个字段就会 project_id=NULL 掉进「未归入项目」。
           // 已有对话（S.convId 存在）不用传，归属由「移动到项目」单独管。
@@ -2105,6 +2112,10 @@
       if (c.model) { S.model = c.model; $('#modelSel').value = S.model; }
       S.agentId = c.agentId || '';
       S.webSearch = !!c.webSearch;
+      // ★ 深度思考不单独恢复，一律**从 model 推导** —— 两者是同一个状态的
+      //   两个入口，分开存会出现"下拉是通用、按钮还亮着"的自相矛盾。
+      //   （renderDtBtn 会顺带把 S.deepThink 对齐到 model）
+      renderDtBtn();
       // 恢复这条对话自己的学习模式。以前这里漏了，所以打开旧对话时
       // 选择器显示的是上一条对话的模式 —— 与这条对话实际用的模式不一致。
       if (c.mode) setMode(c.mode, { silent: true });
@@ -2143,6 +2154,7 @@
     if (c.agentId) bits.push('智能体：' + agentName(c.agentId));
     if (c.instructions) bits.push('已设指令');
     if (c.webSearch) bits.push('联网搜索已开');
+    if (c.model === 'deep' || c.deepThink) bits.push('深度思考已开');
     return bits.length ? bits.join(' · ') : '问吧，我不会直接给你答案';
   }
 
@@ -2188,6 +2200,10 @@
     const keepAgent = !!(opts && opts.keepAgent);
     if (!keepAgent) S.agentId = '';
     S.webSearch = false; S.pending = []; S.tempDocs = [];
+    // 深度思考**不像联网那样重置** —— 它是"我要用哪种档位"的偏好，
+    // 用户开了就是想让接下来的提问都走深思考；每建一条新对话就悄悄关掉，
+    // 正是本项目踩过的那种"设了没生效"的坑。S.model 本就不重置，这里跟着它走。
+    renderDtBtn();
     $('#convTitle').textContent = '新对话';
     $('#convSubText').textContent = S.agentId
       ? ('智能体：' + agentName(S.agentId))
@@ -2215,6 +2231,37 @@
     if (!b) return;
     b.classList.toggle('on', !!S.webSearch);
     b.textContent = S.webSearch ? '联网搜索 · 开' : '联网搜索';
+  }
+  /**
+   * 深度思考开关的渲染。
+   * ★ 它的"开/关"不存自己的一份状态，而是**读 S.model**（是否 deep 档）——
+   *   顶栏模型下拉和这个按钮是同一个状态的两个人性化入口，分开存必然会出现
+   *   "下拉切回通用、按钮还亮着"这种自相矛盾的界面。
+   */
+  function renderDtBtn() {
+    const b = $('#dtBtn');
+    if (!b) return;
+    const on = S.model === 'deep';
+    S.deepThink = on;
+    b.classList.toggle('on', on);
+    b.textContent = on ? '深度思考 · 开' : '深度思考';
+  }
+  /**
+   * 设定深度思考开关。on=true 走 deep 档，false 回 default 档。
+   * 三处一起改：内存 S.model → 顶栏下拉 → 会话 PATCH。漏任何一处都会让
+   * 界面显示与实际请求不一致（本项目踩过"模式存在但没生效"的坑）。
+   */
+  async function setDeepThink(on) {
+    S.model = on ? 'deep' : 'default';
+    const sel = $('#modelSel');
+    if (sel && sel.value !== S.model) sel.value = S.model;
+    renderDtBtn();
+    if (S.convId) {
+      // deepThink 与 model 一起 PATCH：服务端两条路都认（见 server.js streamReply），
+      // 但状态本身要保持一致，所以两个字段同时写。
+      try { await api('/api/conversations/' + S.convId, { method: 'PATCH', body: { deepThink: !!on, model: S.model } }); } catch (e) {}
+    }
+    toast(on ? '深度思考已开启：难题会先想清楚再答，慢一点但更稳' : '已关闭深度思考：恢复快速回答');
   }
   async function loadAgents() {
     try {
@@ -2279,6 +2326,10 @@
       try { await api('/api/conversations/' + S.convId, { method: 'PATCH', body: { webSearch: S.webSearch } }); } catch (e) {}
     }
     toast(S.webSearch ? '开启联网搜索：适合查最新资讯' : '已关闭联网搜索');
+  }
+
+  async function toggleDeepThink() {
+    return setDeepThink(S.model !== 'deep');
   }
 
   function openConvMenu() {
@@ -6052,6 +6103,7 @@
     $('#agentBtn').addEventListener('click', openAgents);
     $('#convMenuBtn').addEventListener('click', openConvMenu);
     $('#webBtn').addEventListener('click', toggleWeb);
+    $('#dtBtn').addEventListener('click', toggleDeepThink);
     $('#ttsBtn').addEventListener('click', openTtsSettings);
     $('#attachBtn').addEventListener('click', () => $('#attachFile').click());
     $('#attachFile').addEventListener('change', async e => {
@@ -6173,7 +6225,14 @@
       S.model = e.target.value;
       const m = (S.models || []).filter(x => x.id === S.model)[0];
       toast(m && m.desc ? m.desc : '已切换模型');
-      if (S.convId) api('/api/conversations/' + S.convId, { method: 'PATCH', body: { model: S.model } }).catch(() => {});
+      // ★ 顶栏下拉切到/切离 deep 档时，深度思考按钮要跟着亮/灭 ——
+      //   两者是同一个状态，不同步就是自相矛盾的界面。
+      renderDtBtn();
+      if (S.convId) {
+        api('/api/conversations/' + S.convId, {
+          method: 'PATCH', body: { model: S.model, deepThink: S.model === 'deep' },
+        }).catch(() => {});
+      }
     });
     $('#projectSel').addEventListener('change', async e => {
       const v = e.target.value;
